@@ -1,4 +1,5 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
+import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
 test('a retrieve for a client includes global', () => {
@@ -23,6 +24,21 @@ test('invoke without a project is rejected', () => {
 
 test('invoke without a prompt is rejected', () => {
   expect(parseInvokePayload({ project: 'bpp' })).toMatchObject({ status: 'error' });
+});
+
+test('check-readiness is accepted as a skill', () => {
+  expect(parseInvokePayload({ prompt: 'JOIN single table', project: 'bpp', skill: 'check-readiness' })).toEqual({
+    prompt: 'JOIN single table',
+    project: 'bpp',
+    skill: 'check-readiness',
+  });
+});
+
+test('an unknown skill is rejected', () => {
+  expect(parseInvokePayload({ prompt: 'JOIN single table', project: 'bpp', skill: 'draft' })).toEqual({
+    response: 'skill must be check-readiness when set.',
+    status: 'error',
+  });
 });
 
 test('answer uses retrieved decisions and documents for that project', async () => {
@@ -95,3 +111,48 @@ test('a failed decision search still answers from documents', async () => {
     error.mockRestore();
   }
 });
+
+test('check-readiness loads rules, repos, decisions, and documents', async () => {
+  const retrieve = jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]);
+  const searchDecisions = jest.fn().mockResolvedValue([]);
+  const loadRules = jest.fn().mockResolvedValue([
+    {
+      project: 'global',
+      ruleId: 'small-diffs',
+      title: 'Small diffs. No drive-by refactors.',
+      body: 'Prefer small, reviewable diffs.',
+    },
+  ]);
+  const loadRepos = jest.fn().mockResolvedValue([
+    {
+      project: 'bpp',
+      repoId: 'bpp/learn',
+      owner: 'bpp',
+      repo: 'learn',
+      url: 'https://github.com/bpp/learn',
+      summary: 'Learner app.',
+    },
+  ]);
+  const complete = jest.fn().mockResolvedValue('Ready. Target bpp/learn. Cite small-diffs.');
+  const result = await checkReadiness({
+    prompt: 'JOIN single table',
+    project: 'bpp',
+    retrieve,
+    searchDecisions,
+    loadRules,
+    loadRepos,
+    complete,
+  });
+  expect(loadRules).toHaveBeenCalledWith('bpp');
+  expect(loadRepos).toHaveBeenCalledWith('bpp');
+  expect(complete).toHaveBeenCalledWith(
+    expect.objectContaining({
+      prompt: 'JOIN single table',
+      project: 'bpp',
+      rules: [expect.objectContaining({ ruleId: 'small-diffs' })],
+      repos: [expect.objectContaining({ repoId: 'bpp/learn' })],
+    }),
+  );
+  expect(result.status).toBe('success');
+});
+

@@ -193,11 +193,14 @@ test('the knowledge base reads the documents bucket only', () => {
       KNOWLEDGE_BASE_ID: Match.anyValue(),
       ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
       DECISIONS_TABLE_NAME: Match.anyValue(),
+      RULES_TABLE_NAME: Match.anyValue(),
+      REPOS_TABLE_NAME: Match.anyValue(),
     }),
   });
   const templateJson = JSON.stringify(template.toJSON());
   expect(templateJson).toContain('bedrock:Retrieve');
   expect(templateJson).toContain('dynamodb:SearchVectors');
+  expect(templateJson).toContain('dynamodb:Query');
   expect(templateJson).toContain(`/index/${DECISIONS_VECTOR_INDEX}`);
 });
 
