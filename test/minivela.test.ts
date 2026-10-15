@@ -14,7 +14,7 @@ test('the stack name defaults to minivela and a transcript put can write a decis
   const template = Template.fromStack(stack);
 
   expect(stack.stackName).toBe('minivela');
-  template.resourceCountIs('AWS::S3::Bucket', 1);
+  template.resourceCountIs('AWS::S3::Bucket', 2);
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     BillingMode: 'PAY_PER_REQUEST',
@@ -71,6 +71,93 @@ test('the stack name defaults to minivela and a transcript put can write a decis
       ],
     },
   });
+});
+
+test('the knowledge base reads the documents bucket only', () => {
+  const template = Template.fromStack(stackOf(createApp(), DEFAULT_STACK_NAME));
+  const buckets = template.findResources('AWS::S3::Bucket');
+  const transcriptBucketId = Object.keys(buckets).find((id) => id.startsWith('Transcripts'));
+  const documentsBucketId = Object.keys(buckets).find((id) => id.startsWith('Documents'));
+  expect(transcriptBucketId).toBeDefined();
+  expect(documentsBucketId).toBeDefined();
+  if (!transcriptBucketId || !documentsBucketId) {
+    throw new Error('expected transcript and documents buckets');
+  }
+
+  const dataSources = template.findResources('AWS::Bedrock::DataSource');
+  expect(Object.keys(dataSources)).toHaveLength(1);
+  const dataSource = Object.values(dataSources)[0];
+  expect(dataSource.Properties.DataSourceConfiguration).toEqual({
+    Type: 'S3',
+    S3Configuration: { BucketArn: { 'Fn::GetAtt': [documentsBucketId, 'Arn'] } },
+  });
+  expect(dataSource.Properties.DataDeletionPolicy).toBe('RETAIN');
+  expect(JSON.stringify(dataSource)).not.toContain(transcriptBucketId);
+
+  template.hasResourceProperties('AWS::Bedrock::KnowledgeBase', {
+    KnowledgeBaseConfiguration: {
+      Type: 'VECTOR',
+      VectorKnowledgeBaseConfiguration: {
+        EmbeddingModelConfiguration: {
+          BedrockEmbeddingModelConfiguration: { Dimensions: EMBEDDING_DIMENSIONS },
+        },
+      },
+    },
+    StorageConfiguration: {
+      Type: 'S3_VECTORS',
+      S3VectorsConfiguration: { IndexArn: Match.anyValue() },
+    },
+  });
+  template.hasResourceProperties('AWS::S3Vectors::Index', {
+    DataType: 'float32',
+    Dimension: EMBEDDING_DIMENSIONS,
+    DistanceMetric: 'cosine',
+    MetadataConfiguration: {
+      NonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'],
+    },
+  });
+  template.hasResource('AWS::Bedrock::KnowledgeBase', { DeletionPolicy: 'Retain' });
+  template.hasResource('AWS::S3Vectors::VectorBucket', { DeletionPolicy: 'Retain' });
+  template.hasResource('AWS::S3Vectors::Index', { DeletionPolicy: 'Retain' });
+
+  const knowledgeBases = template.findResources('AWS::Bedrock::KnowledgeBase');
+  const knowledgeBaseId = Object.keys(knowledgeBases)[0];
+  const policyIds = Object.keys(template.findResources('AWS::IAM::Policy')).filter((id) =>
+    id.startsWith('KnowledgeBaseRoleDefaultPolicy'),
+  );
+  expect(policyIds).toHaveLength(1);
+  expect(knowledgeBases[knowledgeBaseId].DependsOn).toEqual(expect.arrayContaining(policyIds));
+  const roleId = Object.values(knowledgeBases)[0].Properties.RoleArn['Fn::GetAtt'][0];
+  const rolePolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
+    JSON.stringify(policy.Properties.Roles).includes(roleId),
+  );
+  const rolePolicy = JSON.stringify(rolePolicies);
+  expect(rolePolicy).toContain(documentsBucketId);
+  expect(rolePolicy).not.toContain(transcriptBucketId);
+  expect(rolePolicy).toContain('amazon.titan-embed-text-v2:0');
+
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Timeout: 30,
+    Environment: {
+      Variables: Match.objectLike({
+        KNOWLEDGE_BASE_ID: Match.anyValue(),
+        DATA_SOURCE_ID: Match.anyValue(),
+      }),
+    },
+  });
+  template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+    BatchSize: 100,
+    MaximumBatchingWindowInSeconds: 30,
+  });
+  const queues = template.findResources('AWS::SQS::Queue');
+  expect(
+    Object.keys(queues).some((id) => id.startsWith('IngestDocuments') && !id.includes('Failure')),
+  ).toBe(true);
+  const documentNotifications = Object.values(template.findResources('Custom::S3BucketNotifications')).filter(
+    (resource) => JSON.stringify(resource.Properties.BucketName).includes(documentsBucketId),
+  );
+  expect(documentNotifications).toHaveLength(1);
+  expect(JSON.stringify(documentNotifications[0].Properties.NotificationConfiguration)).toContain('QueueConfigurations');
 });
 
 test('stackName context overrides the CloudFormation stack name', () => {
