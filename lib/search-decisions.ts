@@ -3,6 +3,7 @@ import { projectRetrieveValues } from './project-filter.js';
 
 export const DECISIONS_VECTOR_INDEX = 'decisions-by-project';
 export const DECISIONS_SEARCH_TOP_K = 5;
+export const DECISION_MAX_COSINE_DISTANCE = 0.5;
 
 export type RetrievedDecision = {
   project: string;
@@ -14,6 +15,11 @@ export type RetrievedDecision = {
   timestamp: string;
   loggedAt: string;
   sourceKey: string;
+};
+
+export type ScoredDecision = {
+  decision: RetrievedDecision;
+  score: number;
 };
 
 export function searchVectorFromEmbedding(embedding: number[]): Array<{ N: string }> {
@@ -80,24 +86,68 @@ export function decisionFromItem(
   };
 }
 
-export function decisionsFromSearchResults(
-  results: Array<{ Item?: Record<string, AttributeValue> }> | undefined,
-): RetrievedDecision[] {
+export function scoredDecisionsFromSearchResults(
+  results: Array<{ Item?: Record<string, AttributeValue>; Score?: number }> | undefined,
+): ScoredDecision[] {
   return (results ?? []).flatMap((hit) => {
     const decision = decisionFromItem(hit.Item);
-    return decision ? [decision] : [];
+    if (!decision || typeof hit.Score !== 'number') {
+      return [];
+    }
+    return [{ decision, score: hit.Score }];
   });
+}
+
+export function selectDecisions(requested: string, scored: ScoredDecision[]): RetrievedDecision[] {
+  const close = scored.filter((row) => row.score <= DECISION_MAX_COSINE_DISTANCE).map((row) => row.decision);
+  return collapseConflicts(rankDecisions(requested, close));
+}
+
+export function rankDecisions(requested: string, decisions: RetrievedDecision[]): RetrievedDecision[] {
+  return [...decisions].sort((left, right) => {
+    const leftLevel = left.project === requested ? 0 : 1;
+    const rightLevel = right.project === requested ? 0 : 1;
+    if (leftLevel !== rightLevel) {
+      return leftLevel - rightLevel;
+    }
+    const logged = right.loggedAt.localeCompare(left.loggedAt);
+    if (logged !== 0) {
+      return logged;
+    }
+    return right.timestamp.localeCompare(left.timestamp);
+  });
+}
+
+export function collapseConflicts(ranked: RetrievedDecision[]): RetrievedDecision[] {
+  const kept: RetrievedDecision[] = [];
+  const seen = new Set<string>();
+  for (const decision of ranked) {
+    const key = decision.title.trim().toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    kept.push(decision);
+  }
+  return kept;
 }
 
 export async function searchDecisionsAcrossProjects(input: {
   project: string;
   embedding: number[];
-  searchOne: (project: string, embedding: number[]) => Promise<RetrievedDecision[]>;
+  searchOne: (project: string, embedding: number[]) => Promise<ScoredDecision[]>;
 }): Promise<RetrievedDecision[]> {
   const groups = await Promise.all(
-    projectRetrieveValues(input.project).map((value) => input.searchOne(value, input.embedding)),
+    projectRetrieveValues(input.project).map(async (value) => {
+      try {
+        return await input.searchOne(value, input.embedding);
+      } catch (error) {
+        console.error(error);
+        return [];
+      }
+    }),
   );
-  return groups.flat();
+  return selectDecisions(input.project, groups.flat());
 }
 
 function stringAttr(item: Record<string, AttributeValue>, key: string): string | undefined {

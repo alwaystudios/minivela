@@ -70,3 +70,28 @@ test('answer uses retrieved decisions and documents for that project', async () 
   });
   expect(result).toEqual({ response: 'CSV only. Cite the later loggedAt.', status: 'success' });
 });
+
+test('a failed decision search still answers from documents', async () => {
+  const retrieve = jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]);
+  const searchDecisions = jest.fn().mockRejectedValue(new Error('SearchVectors failed'));
+  const complete = jest.fn().mockResolvedValue('Use a single table.');
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await answerFromMemory({
+      prompt: 'RFC 162',
+      project: 'bpp',
+      retrieve,
+      searchDecisions,
+      complete,
+    });
+    expect(complete).toHaveBeenCalledWith({
+      prompt: 'RFC 162',
+      project: 'bpp',
+      chunks: [{ text: 'single table', uri: 's3://doc/rfc.md' }],
+      decisions: [],
+    });
+    expect(result).toEqual({ response: 'Use a single table.', status: 'success' });
+  } finally {
+    error.mockRestore();
+  }
+});

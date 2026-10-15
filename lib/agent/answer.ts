@@ -43,10 +43,12 @@ export async function answerFromMemory(input: {
     decisions: RetrievedDecision[];
   }) => Promise<string>;
 }): Promise<AnswerResult> {
-  const [chunks, decisions] = await Promise.all([
-    input.retrieve({ prompt: input.prompt, project: input.project }),
-    input.searchDecisions({ prompt: input.prompt, project: input.project }),
-  ]);
+  const chunksPromise = input.retrieve({ prompt: input.prompt, project: input.project });
+  const decisions = await input.searchDecisions({ prompt: input.prompt, project: input.project }).catch((error) => {
+    console.error(error);
+    return [];
+  });
+  const chunks = await chunksPromise;
   const response = await input.complete({
     prompt: input.prompt,
     project: input.project,

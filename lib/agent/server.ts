@@ -2,12 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
-import { EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from '../models.js';
+import { embedText } from '../embed.js';
+import { EXTRACT_MODEL_ID } from '../models.js';
 import {
-  decisionsFromSearchResults,
   decisionsSearchInput,
+  scoredDecisionsFromSearchResults,
   searchDecisionsAcrossProjects,
   type RetrievedDecision,
+  type ScoredDecision,
 } from '../search-decisions.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
 
@@ -53,30 +55,7 @@ async function retrieve(query: { prompt: string; project: string }): Promise<Ret
   });
 }
 
-async function embed(text: string): Promise<number[]> {
-  const response = await bedrock.send(
-    new InvokeModelCommand({
-      modelId: EMBED_MODEL_ID,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({
-        inputText: text,
-        dimensions: EMBEDDING_DIMENSIONS,
-        normalize: true,
-      }),
-    }),
-  );
-  const payload = JSON.parse(new TextDecoder().decode(response.body)) as { embedding?: number[] };
-  if (!payload.embedding) {
-    throw new Error('embed model returned no embedding');
-  }
-  if (payload.embedding.length !== EMBEDDING_DIMENSIONS) {
-    throw new Error(`expected embedding length ${EMBEDDING_DIMENSIONS}`);
-  }
-  return payload.embedding;
-}
-
-async function searchOne(project: string, embedding: number[]): Promise<RetrievedDecision[]> {
+async function searchOne(project: string, embedding: number[]): Promise<ScoredDecision[]> {
   const result = await dynamodb.send(
     new SearchVectorsCommand(
       decisionsSearchInput({
@@ -86,16 +65,21 @@ async function searchOne(project: string, embedding: number[]): Promise<Retrieve
       }),
     ),
   );
-  return decisionsFromSearchResults(result.SearchResults);
+  return scoredDecisionsFromSearchResults(result.SearchResults);
 }
 
 async function searchDecisions(query: { prompt: string; project: string }): Promise<RetrievedDecision[]> {
-  const embedding = await embed(query.prompt);
-  return searchDecisionsAcrossProjects({
-    project: query.project,
-    embedding,
-    searchOne,
-  });
+  try {
+    const embedding = await embedText(bedrock, query.prompt);
+    return await searchDecisionsAcrossProjects({
+      project: query.project,
+      embedding,
+      searchOne,
+    });
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
 }
 
 async function complete(query: {
@@ -128,7 +112,7 @@ async function complete(query: {
         anthropic_version: 'bedrock-2023-05-31',
         max_tokens: 1024,
         system:
-          'Answer using only the retrieved decisions and documents for this project. Decisions overrule documents. Precedence, highest first: a decision for the requested project, then a global decision, then that client\'s document chunks, then global document chunks. When two retrieved decisions conflict, the later loggedAt wins. If loggedAt is the same, the later cue timestamp wins. A newer global decision does not beat an older decision for the requested project. Cite loggedAt when a later decision won a conflict. If there are none, say so. Do not invent. Name a source key or uri when you use a hit.',
+          'Answer using only the retrieved decisions and documents for this project. The decisions list is already ranked and conflicts are already resolved. Decisions overrule documents. Cite loggedAt when you follow a decision. If there are none, say so. Do not invent. Name a source key or uri when you use a hit.',
         messages: [
           {
             role: 'user',

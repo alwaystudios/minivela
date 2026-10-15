@@ -2,8 +2,9 @@ import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedroc
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { embedText } from './embed.js';
 import { systemPrompt, userMessageTemplate } from './extract/prompt.js';
-import { EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from './models.js';
+import { EXTRACT_MODEL_ID } from './models.js';
 import { type DecisionWrite, processTranscriptObject } from './process-transcript.js';
 import { decodeS3Key, projectFromTranscriptKey } from './transcript-key.js';
 
@@ -46,7 +47,7 @@ export async function handler(event: S3PutEvent): Promise<void> {
       systemPrompt,
       userMessageTemplate,
       extract,
-      embed,
+      embed: (text) => embedText(bedrock, text),
       put: (item) => putDecision(tableName, item),
     });
     console.info(JSON.stringify({ key, ...result }));
@@ -75,26 +76,6 @@ async function extract(request: { system: string; user: string }): Promise<strin
     throw new Error('extract model returned no text');
   }
   return text;
-}
-
-async function embed(text: string): Promise<number[]> {
-  const response = await bedrock.send(
-    new InvokeModelCommand({
-      modelId: EMBED_MODEL_ID,
-      contentType: 'application/json',
-      accept: 'application/json',
-      body: JSON.stringify({
-        inputText: text,
-        dimensions: EMBEDDING_DIMENSIONS,
-        normalize: true,
-      }),
-    }),
-  );
-  const payload = JSON.parse(new TextDecoder().decode(response.body)) as { embedding?: number[] };
-  if (!payload.embedding) {
-    throw new Error('embed model returned no embedding');
-  }
-  return payload.embedding;
 }
 
 async function putDecision(tableName: string, item: DecisionWrite): Promise<void> {
