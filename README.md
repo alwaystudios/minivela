@@ -1,15 +1,15 @@
 # minivela
 
-Use a named profile from `~/.aws/config`. The profile must be in `us-east-1`, `us-east-2`, or `us-west-2`.
+Use a named profile from `~/.aws/config`. Pass the region on the command. It must be `us-east-1`, `us-east-2`, or `us-west-2`.
 
 ```bash
-npx cdk deploy --profile my-profile
+npx cdk deploy --profile my-profile --region us-east-1
 ```
 
 The stack name defaults to `minivela`.
 
 ```bash
-npx cdk deploy --profile my-profile -c stackName=acme
+npx cdk deploy --profile my-profile --region us-east-1 -c stackName=acme
 ```
 
 A stack name starts with a letter and contains only letters, digits, and hyphens.
