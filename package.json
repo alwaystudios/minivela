@@ -20,6 +20,7 @@
     "typescript": "~7.0.2"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agent": "^3.1152.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1152.0",
     "@aws-sdk/client-dynamodb": "^3.1152.0",
     "@aws-sdk/client-s3": "^3.1152.0",

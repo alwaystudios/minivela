@@ -33,14 +33,6 @@ Ingestion is not code in this repo. Do not add an importer, a sidecar writer, or
 When asked to ingest:
 
 1. Put the files and their sidecars in the documents bucket only.
-2. Start an ingestion job. Deploy prints `KnowledgeBaseId` and `DocumentsDataSourceId`. Creating the knowledge base does not watch the bucket. Sync is incremental and runs only when started.
-
-```bash
-aws bedrock-agent start-ingestion-job \
-  --knowledge-base-id "$KNOWLEDGE_BASE_ID" \
-  --data-source-id "$DATA_SOURCE_ID" \
-  --profile my-profile \
-  --region us-east-1
-```
+2. A put on the documents bucket queues a sync. Many files in a short window become one ingestion job. Wait for that job to finish before querying. Do not start a job per file. Bedrock's own API allows about one `StartIngestionJob` every ten seconds, and only one job runs at a time. The cost is Titan embeddings for new or changed files, not the sync call.
 
 3. Leave the transcripts bucket alone. Do not copy a transcript into the documents bucket in any format.

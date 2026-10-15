@@ -3,6 +3,7 @@ import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -158,6 +159,7 @@ export class MinivelaStack extends cdk.Stack {
       },
     });
     knowledgeBase.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    knowledgeBase.node.addDependency(knowledgeBaseRole.node.findChild('DefaultPolicy'));
 
     const documentsDataSource = new bedrock.CfnDataSource(this, 'DocumentsDataSource', {
       name: 'documents',
@@ -180,6 +182,46 @@ export class MinivelaStack extends cdk.Stack {
       },
     });
     documentsDataSource.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    const ingestFailures = new sqs.Queue(this, 'IngestDocumentsFailures', {
+      retentionPeriod: cdk.Duration.days(14),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    const ingestDocumentsQueue = new sqs.Queue(this, 'IngestDocuments', {
+      visibilityTimeout: cdk.Duration.minutes(2),
+      retentionPeriod: cdk.Duration.days(14),
+      deadLetterQueue: { queue: ingestFailures, maxReceiveCount: 20 },
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const ingestLogs = new logs.LogGroup(this, 'IngestDocumentsLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const ingestDocuments = new NodejsFunction(this, 'IngestDocumentsFn', {
+      entry: 'lib/sync-documents-lambda.ts',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      timeout: cdk.Duration.seconds(30),
+      logGroup: ingestLogs,
+      environment: {
+        KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
+        DATA_SOURCE_ID: documentsDataSource.attrDataSourceId,
+      },
+    });
+    ingestDocuments.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:StartIngestionJob', 'bedrock:ListIngestionJobs'],
+        resources: [knowledgeBase.attrKnowledgeBaseArn],
+      }),
+    );
+    ingestDocuments.addEventSource(
+      new SqsEventSource(ingestDocumentsQueue, {
+        batchSize: 100,
+        maxBatchingWindow: cdk.Duration.seconds(30),
+        reportBatchItemFailures: false,
+      }),
+    );
+    documents.addEventNotification(s3.EventType.OBJECT_CREATED, new s3n.SqsDestination(ingestDocumentsQueue));
 
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,
