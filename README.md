@@ -3,7 +3,6 @@
 Use a named profile from `~/.aws/config`.
 
 ```bash
-npx cdk synth --profile my-profile
 npx cdk deploy --profile my-profile
 ```
 
@@ -13,4 +12,6 @@ The stack name defaults to `minivela`.
 npx cdk deploy --profile my-profile -c stackName=acme
 ```
 
-A stack name starts with a letter and contains only letters, digits, and hyphens. The stack has no resources yet, so deploy fails until a later change adds one.
+A stack name starts with a letter and contains only letters, digits, and hyphens.
+
+Deploy prints the transcripts bucket name. Drop a WebVTT file at `<project>/transcripts/<meeting>.vtt`. That starts extraction. Decisions are stored in DynamoDB. The file stays in the bucket.

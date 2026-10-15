@@ -8,6 +8,11 @@ export function createApp(props?: cdk.AppProps): cdk.App {
     analyticsReporting: false,
   });
   const stackName = stackNameFromContext(app.node.tryGetContext('stackName'));
-  new MinivelaStack(app, stackName, { stackName });
+  const account = process.env.CDK_DEFAULT_ACCOUNT;
+  const region = process.env.CDK_DEFAULT_REGION;
+  new MinivelaStack(app, stackName, {
+    stackName,
+    ...(account && region ? { env: { account, region } } : {}),
+  });
   return app;
 }
