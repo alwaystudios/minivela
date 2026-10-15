@@ -285,7 +285,12 @@ export class MinivelaStack extends cdk.Stack {
         ],
       }),
     );
-    decisions.grant(agent.role, 'dynamodb:SearchVectors');
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:SearchVectors'],
+        resources: [decisions.tableArn, `${decisions.tableArn}/index/${DECISIONS_VECTOR_INDEX}`],
+      }),
+    );
 
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,

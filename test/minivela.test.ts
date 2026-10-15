@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { createApp } from '../lib/app.js';
 import { BEDROCK_REGIONS, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from '../lib/models.js';
+import { DECISIONS_VECTOR_INDEX } from '../lib/search-decisions.js';
 import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
 
 function stackOf(app: cdk.App, name: string): cdk.Stack {
@@ -185,6 +186,7 @@ test('the knowledge base reads the documents bucket only', () => {
   const templateJson = JSON.stringify(template.toJSON());
   expect(templateJson).toContain('bedrock:Retrieve');
   expect(templateJson).toContain('dynamodb:SearchVectors');
+  expect(templateJson).toContain(`/index/${DECISIONS_VECTOR_INDEX}`);
 });
 
 test('stackName context overrides the CloudFormation stack name', () => {
