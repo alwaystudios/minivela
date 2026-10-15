@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib/core';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -6,6 +7,7 @@ import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
+import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { BEDROCK_REGIONS, EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from './models.js';
@@ -83,9 +85,109 @@ export class MinivelaStack extends cdk.Stack {
       suffix: '.vtt',
     });
 
+    const documents = new s3.Bucket(this, 'Documents', {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    const vectorBucket = new s3vectors.CfnVectorBucket(this, 'VectorBucket');
+    vectorBucket.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    const vectorIndex = new s3vectors.CfnIndex(this, 'VectorIndex', {
+      dataType: 'float32',
+      dimension: EMBEDDING_DIMENSIONS,
+      distanceMetric: 'cosine',
+      vectorBucketArn: vectorBucket.attrVectorBucketArn,
+    });
+    vectorIndex.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    const knowledgeBaseRole = new iam.Role(this, 'KnowledgeBaseRole', {
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
+        conditions: {
+          StringEquals: { 'aws:SourceAccount': cdk.Aws.ACCOUNT_ID },
+          ArnLike: {
+            'aws:SourceArn': `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:knowledge-base/*`,
+          },
+        },
+      }),
+    });
+    documents.grantRead(knowledgeBaseRole);
+    knowledgeBaseRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${EMBED_MODEL_ID}`],
+      }),
+    );
+    knowledgeBaseRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          's3vectors:GetIndex',
+          's3vectors:QueryVectors',
+          's3vectors:PutVectors',
+          's3vectors:GetVectors',
+          's3vectors:DeleteVectors',
+        ],
+        resources: [vectorIndex.attrIndexArn],
+      }),
+    );
+
+    const knowledgeBase = new bedrock.CfnKnowledgeBase(this, 'KnowledgeBase', {
+      name: cdk.Names.uniqueResourceName(documents, { maxLength: 100 }),
+      roleArn: knowledgeBaseRole.roleArn,
+      knowledgeBaseConfiguration: {
+        type: 'VECTOR',
+        vectorKnowledgeBaseConfiguration: {
+          embeddingModelArn: `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${EMBED_MODEL_ID}`,
+          embeddingModelConfiguration: {
+            bedrockEmbeddingModelConfiguration: {
+              dimensions: EMBEDDING_DIMENSIONS,
+            },
+          },
+        },
+      },
+      storageConfiguration: {
+        type: 'S3_VECTORS',
+        s3VectorsConfiguration: {
+          indexArn: vectorIndex.attrIndexArn,
+        },
+      },
+    });
+    knowledgeBase.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
+    const documentsDataSource = new bedrock.CfnDataSource(this, 'DocumentsDataSource', {
+      name: 'documents',
+      knowledgeBaseId: knowledgeBase.attrKnowledgeBaseId,
+      dataDeletionPolicy: 'RETAIN',
+      dataSourceConfiguration: {
+        type: 'S3',
+        s3Configuration: {
+          bucketArn: documents.bucketArn,
+        },
+      },
+      vectorIngestionConfiguration: {
+        chunkingConfiguration: {
+          chunkingStrategy: 'FIXED_SIZE',
+          fixedSizeChunkingConfiguration: {
+            maxTokens: 300,
+            overlapPercentage: 20,
+          },
+        },
+      },
+    });
+    documentsDataSource.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,
       description: 'Drop a .vtt file at <project>/transcripts/<meeting>.vtt',
+    });
+    new cdk.CfnOutput(this, 'DocumentsBucketName', {
+      value: documents.bucketName,
+      description: 'Knowledge base documents. Markdown and a sidecar beside each file. No transcripts.',
+    });
+    new cdk.CfnOutput(this, 'KnowledgeBaseId', {
+      value: knowledgeBase.attrKnowledgeBaseId,
     });
     new cdk.CfnOutput(this, 'DecisionsTableName', {
       value: decisions.tableName,

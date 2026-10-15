@@ -14,10 +14,14 @@ npx cdk deploy --profile my-profile --region us-east-1 -c stackName=acme
 
 A stack name starts with a letter and contains only letters, digits, and hyphens.
 
-Deploy prints the transcripts bucket name. Upload a WebVTT file at `<project>/transcripts/<meeting>.vtt`.
+Deploy prints the transcripts bucket name and the documents bucket name.
+
+Upload a WebVTT file to the transcripts bucket at `<project>/transcripts/<meeting>.vtt`.
 
 ```bash
-aws s3 cp standup.vtt s3://<bucket>/demo/transcripts/standup.vtt --profile my-profile --region us-east-1
+aws s3 cp standup.vtt s3://<transcripts-bucket>/demo/transcripts/standup.vtt --profile my-profile --region us-east-1
 ```
 
-That starts extraction. Decisions are stored in DynamoDB. The file stays in the bucket.
+That starts extraction. Decisions are stored in DynamoDB. The file stays in the transcripts bucket.
+
+The documents bucket is the knowledge base. Put markdown there, with a sidecar beside each file. Transcripts do not go in that bucket.
