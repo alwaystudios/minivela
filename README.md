@@ -26,13 +26,25 @@ That starts extraction. Decisions are stored in DynamoDB. The file stays in the 
 
 The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file. A put starts one ingestion job after a short wait, so a burst of files is one sync. Transcripts do not go in that bucket.
 
-Deploy prints `KnowledgeBaseId` and `ReposTableName`. The repo map is DynamoDB, queried by project. It is not a knowledge base data source. Retrieve with a client filter. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
+Deploy prints `KnowledgeBaseId`. Retrieve with a client filter. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
 
 ```bash
 aws bedrock-agent-runtime retrieve \
   --knowledge-base-id <knowledge-base-id> \
   --retrieval-query '{"text":"what did we decide about export format"}' \
   --retrieval-configuration '{"vectorSearchConfiguration":{"numberOfResults":3,"filter":{"in":{"key":"project","value":["demo","global"]}}}}' \
+  --profile my-profile \
+  --region us-east-1
+```
+
+Deploy prints `ReposTableName`. The repo map is DynamoDB, queried by project. It is not a knowledge base data source. `project` is a reserved word, so the query aliases it.
+
+```bash
+aws dynamodb query \
+  --table-name <repos-table-name> \
+  --key-condition-expression '#p = :p' \
+  --expression-attribute-names '{"#p":"project"}' \
+  --expression-attribute-values '{":p":{"S":"demo"}}' \
   --profile my-profile \
   --region us-east-1
 ```
