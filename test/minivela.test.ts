@@ -16,7 +16,7 @@ test('the stack name defaults to minivela and a transcript put can write a decis
 
   expect(stack.stackName).toBe('minivela');
   template.resourceCountIs('AWS::S3::Bucket', 2);
-  template.resourceCountIs('AWS::DynamoDB::Table', 2);
+  template.resourceCountIs('AWS::DynamoDB::Table', 3);
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     BillingMode: 'PAY_PER_REQUEST',
@@ -47,6 +47,18 @@ test('the stack name defaults to minivela and a transcript put can write a decis
   );
   expect(repoTable).toBeDefined();
   expect(repoTable?.Properties.VectorIndexes).toBeUndefined();
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'project', KeyType: 'HASH' },
+      { AttributeName: 'ruleId', KeyType: 'RANGE' },
+    ],
+  });
+  const rulesTable = Object.values(tables).find((table) =>
+    JSON.stringify(table.Properties.KeySchema).includes('ruleId'),
+  );
+  expect(rulesTable).toBeDefined();
+  expect(rulesTable?.Properties.VectorIndexes).toBeUndefined();
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::SQS::Queue', {
     MessageRetentionPeriod: 14 * 24 * 60 * 60,

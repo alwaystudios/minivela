@@ -64,3 +64,16 @@ aws dynamodb query \
   --profile my-profile \
   --region us-east-1
 ```
+
+Deploy prints `RulesTableName`. Hard rules are DynamoDB, queried by project. Load `global` on every skill. They are not a knowledge base data source and have no vectors. `project` is a reserved word, so the query aliases it.
+
+```bash
+aws dynamodb query \
+  --table-name <rules-table-name> \
+  --key-condition-expression '#p = :p' \
+  --expression-attribute-names '{"#p":"project"}' \
+  --expression-attribute-values '{":p":{"S":"global"}}' \
+  --profile my-profile \
+  --region us-east-1
+```
+
