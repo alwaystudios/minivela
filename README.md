@@ -1,16 +1,23 @@
 # minivela
 
-Use a named profile from `~/.aws/config`.
+Use a named profile from `~/.aws/config`. Pass the region on the command. It must be `us-east-1`, `us-east-2`, or `us-west-2`.
 
 ```bash
-npx cdk synth --profile my-profile
-npx cdk deploy --profile my-profile
+npx cdk deploy --profile my-profile --region us-east-1
 ```
 
 The stack name defaults to `minivela`.
 
 ```bash
-npx cdk deploy --profile my-profile -c stackName=acme
+npx cdk deploy --profile my-profile --region us-east-1 -c stackName=acme
 ```
 
-A stack name starts with a letter and contains only letters, digits, and hyphens. The stack has no resources yet, so deploy fails until a later change adds one.
+A stack name starts with a letter and contains only letters, digits, and hyphens.
+
+Deploy prints the transcripts bucket name. Upload a WebVTT file at `<project>/transcripts/<meeting>.vtt`.
+
+```bash
+aws s3 cp standup.vtt s3://<bucket>/demo/transcripts/standup.vtt --profile my-profile --region us-east-1
+```
+
+That starts extraction. Decisions are stored in DynamoDB. The file stays in the bucket.
