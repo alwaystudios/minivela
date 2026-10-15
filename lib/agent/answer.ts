@@ -15,7 +15,7 @@ export type AnswerResult = {
   status: AnswerStatus;
 };
 
-export type InvokeSkill = 'check-readiness';
+export type InvokeSkill = 'check-readiness' | 'draft-work-order';
 
 export function parseInvokePayload(
   raw: unknown,
@@ -35,10 +35,10 @@ export function parseInvokePayload(
   if (body.skill === undefined || body.skill === '') {
     return { prompt, project };
   }
-  if (body.skill !== 'check-readiness') {
-    return { response: 'skill must be check-readiness when set.', status: 'error' };
+  if (body.skill !== 'check-readiness' && body.skill !== 'draft-work-order') {
+    return { response: 'skill must be check-readiness or draft-work-order when set.', status: 'error' };
   }
-  return { prompt, project, skill: 'check-readiness' };
+  return { prompt, project, skill: body.skill };
 }
 
 export async function answerFromMemory(input: {

@@ -48,6 +48,13 @@ export class MinivelaStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    const drafts = new dynamodb.Table(this, 'Drafts', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'draftId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
     const cfnDecisions = decisions.node.defaultChild as dynamodb.CfnTable;
     cfnDecisions.vectorIndexes = [
       {
@@ -273,6 +280,7 @@ export class MinivelaStack extends cdk.Stack {
         DECISIONS_TABLE_NAME: decisions.tableName,
         RULES_TABLE_NAME: rules.tableName,
         REPOS_TABLE_NAME: repos.tableName,
+        DRAFTS_TABLE_NAME: drafts.tableName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
     });
@@ -306,6 +314,12 @@ export class MinivelaStack extends cdk.Stack {
         resources: [rules.tableArn, repos.tableArn],
       }),
     );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'],
+        resources: [drafts.tableArn],
+      }),
+    );
 
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,
@@ -331,6 +345,10 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'RulesTableName', {
       value: rules.tableName,
       description: 'Hard rules. Query global on every skill. Each item is ruleId, title, body. No vectors.',
+    });
+    new cdk.CfnOutput(this, 'DraftsTableName', {
+      value: drafts.tableName,
+      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,
