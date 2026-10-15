@@ -56,7 +56,7 @@ test('a client search hits that client then global', async () => {
 });
 
 test('a global search does not open other clients', async () => {
-  const searchOne = jest.fn(async () => []);
+  const searchOne = jest.fn(async (_project: string) => [] as ScoredDecision[]);
   await searchDecisionsAcrossProjects({
     project: 'global',
     embedding: [1],
