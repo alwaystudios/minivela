@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:04.000 --> 00:00:09.000
+<v Priya Shah>Let's start with the CSV export bug. Where are we?</v>
+
+00:00:09.500 --> 00:00:15.000
+<v Marcus Webb>I'll fix the CSV export bug by Thursday. I found the root cause already.</v>
+
+00:00:15.500 --> 00:00:21.000
+<v Priya Shah>And I think we agreed v1 ships CSV only, not Excel, right?</v>
+
+00:00:21.500 --> 00:00:27.000
+<v Marcus Webb>Yes, that's locked in. Excel export is out of scope for v1.</v>
+
+00:00:27.500 --> 00:00:32.000
+<v Priya Shah>Anything else? No? Ok let's wrap up.</v>
