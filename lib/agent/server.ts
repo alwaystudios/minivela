@@ -1,11 +1,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { DynamoDBClient, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
+import { embedText } from '../embed.js';
 import { EXTRACT_MODEL_ID } from '../models.js';
-import { answerFromDocuments, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
+import {
+  decisionsSearchInput,
+  scoredDecisionsFromSearchResults,
+  searchDecisionsAcrossProjects,
+  type RetrievedDecision,
+  type ScoredDecision,
+} from '../search-decisions.js';
+import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
 
 const retrieveClient = new BedrockAgentRuntimeClient({});
 const bedrock = new BedrockRuntimeClient({});
+const dynamodb = new DynamoDBClient({});
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -45,12 +55,49 @@ async function retrieve(query: { prompt: string; project: string }): Promise<Ret
   });
 }
 
+async function searchOne(project: string, embedding: number[]): Promise<ScoredDecision[]> {
+  const result = await dynamodb.send(
+    new SearchVectorsCommand(
+      decisionsSearchInput({
+        tableName: requiredEnv('DECISIONS_TABLE_NAME'),
+        project,
+        embedding,
+      }),
+    ),
+  );
+  return scoredDecisionsFromSearchResults(result.SearchResults);
+}
+
+async function searchDecisions(query: { prompt: string; project: string }): Promise<RetrievedDecision[]> {
+  try {
+    const embedding = await embedText(bedrock, query.prompt);
+    return await searchDecisionsAcrossProjects({
+      project: query.project,
+      embedding,
+      searchOne,
+    });
+  } catch (error) {
+    console.error(error);
+    return [];
+  }
+}
+
 async function complete(query: {
   prompt: string;
   project: string;
   chunks: RetrievedChunk[];
+  decisions: RetrievedDecision[];
 }): Promise<string> {
-  const context =
+  const decisionsContext =
+    query.decisions.length === 0
+      ? '(no decisions)'
+      : query.decisions
+          .map(
+            (decision, index) =>
+              `${index + 1}. decision ${decision.decisionId} project=${decision.project} loggedAt=${decision.loggedAt} timestamp=${decision.timestamp} source=${decision.sourceKey}\n${decision.title}\n${decision.content}\nquote: ${decision.quote}`,
+          )
+          .join('\n\n');
+  const documentsContext =
     query.chunks.length === 0
       ? '(no documents)'
       : query.chunks
@@ -65,11 +112,11 @@ async function complete(query: {
         anthropic_version: 'bedrock-2023-05-31',
         max_tokens: 1024,
         system:
-          'Answer using only the retrieved documents for this project. If there are none, say so. Do not invent. Name a source uri when you use a chunk.',
+          'Answer using only the retrieved decisions and documents for this project. The decisions list is already ranked and conflicts are already resolved. Decisions overrule documents. Cite loggedAt when you follow a decision. If there are none, say so. Do not invent. Name a source key or uri when you use a hit.',
         messages: [
           {
             role: 'user',
-            content: `project: ${query.project}\nquestion: ${query.prompt}\n\nretrieved:\n${context}`,
+            content: `project: ${query.project}\nquestion: ${query.prompt}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
           },
         ],
       }),
@@ -101,10 +148,11 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     json(res, 400, parsedPayload);
     return;
   }
-  const result = await answerFromDocuments({
+  const result = await answerFromMemory({
     prompt: parsedPayload.prompt,
     project: parsedPayload.project,
     retrieve,
+    searchDecisions,
     complete,
   });
   json(res, 200, result);

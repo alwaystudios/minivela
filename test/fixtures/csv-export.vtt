@@ -1,0 +1,12 @@
+WEBVTT
+
+NOTE This is a caption note
+
+00:00:15.500 --> 00:00:20.000
+<v Priya Shah>Great. And I think we agreed v1 ships CSV only, not Excel, right?</v>
+
+00:00:20.500 --> 00:00:26.000
+<v Marcus Webb>Yes, that's locked in. Excel export is out of scope for v1.</v>
+
+00:00:38.500 --> 00:00:44.000
+<v Priya Shah>Anything else? No? Ok let's wrap up.</v>

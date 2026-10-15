@@ -1,4 +1,7 @@
 import { projectRetrieveFilter } from '../project-filter.js';
+import type { RetrievedDecision } from '../search-decisions.js';
+
+export type { RetrievedDecision };
 
 export type RetrievedChunk = {
   text: string;
@@ -28,14 +31,30 @@ export function parseInvokePayload(raw: unknown): { prompt: string; project: str
   return { prompt, project };
 }
 
-export async function answerFromDocuments(input: {
+export async function answerFromMemory(input: {
   prompt: string;
   project: string;
   retrieve: (query: { prompt: string; project: string }) => Promise<RetrievedChunk[]>;
-  complete: (query: { prompt: string; project: string; chunks: RetrievedChunk[] }) => Promise<string>;
+  searchDecisions: (query: { prompt: string; project: string }) => Promise<RetrievedDecision[]>;
+  complete: (query: {
+    prompt: string;
+    project: string;
+    chunks: RetrievedChunk[];
+    decisions: RetrievedDecision[];
+  }) => Promise<string>;
 }): Promise<AnswerResult> {
-  const chunks = await input.retrieve({ prompt: input.prompt, project: input.project });
-  const response = await input.complete({ prompt: input.prompt, project: input.project, chunks });
+  const chunksPromise = input.retrieve({ prompt: input.prompt, project: input.project });
+  const decisions = await input.searchDecisions({ prompt: input.prompt, project: input.project }).catch((error) => {
+    console.error(error);
+    return [];
+  });
+  const chunks = await chunksPromise;
+  const response = await input.complete({
+    prompt: input.prompt,
+    project: input.project,
+    chunks,
+    decisions,
+  });
   return { response, status: 'success' };
 }
 
