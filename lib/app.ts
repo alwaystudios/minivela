@@ -1,4 +1,5 @@
 import * as cdk from 'aws-cdk-lib/core';
+import { assertBedrockRegion } from './models.js';
 import { MinivelaStack } from './minivela-stack.js';
 import { stackNameFromContext } from './stack-name.js';
 
@@ -10,6 +11,7 @@ export function createApp(props?: cdk.AppProps): cdk.App {
   const stackName = stackNameFromContext(app.node.tryGetContext('stackName'));
   const account = process.env.CDK_DEFAULT_ACCOUNT;
   const region = process.env.CDK_DEFAULT_REGION;
+  assertBedrockRegion(region);
   new MinivelaStack(app, stackName, {
     stackName,
     ...(account && region ? { env: { account, region } } : {}),

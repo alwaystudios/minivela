@@ -1,6 +1,6 @@
 # minivela
 
-Use a named profile from `~/.aws/config`.
+Use a named profile from `~/.aws/config`. The profile must be in `us-east-1`, `us-east-2`, or `us-west-2`.
 
 ```bash
 npx cdk deploy --profile my-profile
