@@ -7,7 +7,7 @@ Read this before changing the stack or ingesting a client's files.
 Transcripts and the knowledge base are different buckets and different processes.
 
 - Transcripts bucket: WebVTT only, at `<client>/transcripts/<meeting>.vtt`. A put runs extraction and writes decisions to DynamoDB. Do not add this bucket as a knowledge base data source. Do not upload anything except `.vtt` here.
-- Documents bucket: the only knowledge base data source. Client markdown goes here.
+- Documents bucket: the only knowledge base data source. Client markdown goes here. Do not upload images (`.png`, `.jpg`, `.webp`, or anything else that is not a document). This knowledge base is Titan text embeddings. A screenshot will fail the sync and will not be retrieved. Leave images out of the drop; the markdown can still name them.
 
 ## Sidecar
 
@@ -32,7 +32,7 @@ Ingestion is not code in this repo. Do not add an importer, a sidecar writer, or
 
 When asked to ingest:
 
-1. Put the files and their sidecars in the documents bucket only.
+1. Put markdown and their sidecars in the documents bucket only. Skip image folders and image files.
 2. A put on the documents bucket queues a sync. Many files in a short window become one ingestion job. Wait for that job to finish before querying. Do not start a job per file. Bedrock's own API allows about one `StartIngestionJob` every ten seconds, and only one job runs at a time. The cost is Titan embeddings for new or changed files, not the sync call.
 
 3. Leave the transcripts bucket alone. Do not copy a transcript into the documents bucket in any format.
