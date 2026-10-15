@@ -115,3 +115,67 @@ aws dynamodb query \
   --region us-east-1
 ```
 
+The stack grants the agent its own role. The profile you use on these commands needs a separate identity policy. An IAM inline policy is capped at 2048 characters, so keep it one compact document. Fill in deploy outputs. `InvokeAgentRuntime` needs the runtime ARN and `/runtime-endpoint/DEFAULT`.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:BatchWriteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:<region>:<account>:table/<stackName>-*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::<transcripts-bucket>/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<documents-bucket>"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::<documents-bucket>/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "bedrock-agentcore:InvokeAgentRuntime",
+      "Resource": [
+        "<agent-runtime-arn>",
+        "<agent-runtime-arn>/runtime-endpoint/DEFAULT"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:GetKnowledgeBase",
+        "bedrock:GetDataSource",
+        "bedrock:ListIngestionJobs",
+        "bedrock:GetIngestionJob",
+        "bedrock:StartIngestionJob",
+        "bedrock:Retrieve"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:<region>:<account>:knowledge-base/<knowledge-base-id>",
+        "arn:aws:bedrock:<region>:<account>:knowledge-base/<knowledge-base-id>/data-source/<data-source-id>"
+      ]
+    }
+  ]
+}
+```
+
