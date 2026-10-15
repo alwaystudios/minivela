@@ -25,3 +25,14 @@ aws s3 cp standup.vtt s3://<transcripts-bucket>/demo/transcripts/standup.vtt --p
 That starts extraction. Decisions are stored in DynamoDB. The file stays in the transcripts bucket.
 
 The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file. A put starts one ingestion job after a short wait, so a burst of files is one sync. Transcripts do not go in that bucket.
+
+Deploy prints `KnowledgeBaseId`. Retrieve with a client filter. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
+
+```bash
+aws bedrock-agent-runtime retrieve \
+  --knowledge-base-id <knowledge-base-id> \
+  --retrieval-query '{"text":"what did we decide about export format"}' \
+  --retrieval-configuration '{"vectorSearchConfiguration":{"numberOfResults":3,"filter":{"in":{"key":"project","value":["demo","global"]}}}}' \
+  --profile my-profile \
+  --region us-east-1
+```
