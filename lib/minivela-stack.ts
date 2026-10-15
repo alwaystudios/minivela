@@ -15,6 +15,7 @@ import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { BEDROCK_REGIONS, EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from './models.js';
+import { DECISIONS_VECTOR_INDEX } from './search-decisions.js';
 
 export class MinivelaStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -43,7 +44,7 @@ export class MinivelaStack extends cdk.Stack {
     const cfnDecisions = decisions.node.defaultChild as dynamodb.CfnTable;
     cfnDecisions.vectorIndexes = [
       {
-        indexName: 'decisions-by-project',
+        indexName: DECISIONS_VECTOR_INDEX,
         dimensions: EMBEDDING_DIMENSIONS,
         distanceFunction: 'COSINE',
         vectorAttribute: { attributeName: 'embedding' },
@@ -262,6 +263,7 @@ export class MinivelaStack extends cdk.Stack {
       environmentVariables: {
         KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
         ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
+        DECISIONS_TABLE_NAME: decisions.tableName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
     });
@@ -279,9 +281,11 @@ export class MinivelaStack extends cdk.Stack {
           ...BEDROCK_REGIONS.map(
             (region) => `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-sonnet-4-6*`,
           ),
+          `arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${EMBED_MODEL_ID}`,
         ],
       }),
     );
+    decisions.grant(agent.role, 'dynamodb:SearchVectors');
 
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,

@@ -26,7 +26,7 @@ That starts extraction. Decisions are stored in DynamoDB. The file stays in the 
 
 The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file. A put starts one ingestion job after a short wait, so a burst of files is one sync. Transcripts do not go in that bucket.
 
-Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `prompt` and `project` on every invoke. The agent retrieves that client plus `global`. It will not search without a project.
+Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `prompt` and `project` on every invoke. The agent retrieves that client plus `global`, and searches transcript decisions the same way. Decisions overrule documents. It will not search without a project.
 
 ```bash
 SESSION=$(uuidgen)

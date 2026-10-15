@@ -179,10 +179,12 @@ test('the knowledge base reads the documents bucket only', () => {
     EnvironmentVariables: Match.objectLike({
       KNOWLEDGE_BASE_ID: Match.anyValue(),
       ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
+      DECISIONS_TABLE_NAME: Match.anyValue(),
     }),
   });
   const templateJson = JSON.stringify(template.toJSON());
   expect(templateJson).toContain('bedrock:Retrieve');
+  expect(templateJson).toContain('dynamodb:SearchVectors');
 });
 
 test('stackName context overrides the CloudFormation stack name', () => {

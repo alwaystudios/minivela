@@ -1,4 +1,4 @@
-import { answerFromDocuments, parseInvokePayload } from '../lib/agent/answer.js';
+import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
 test('a retrieve for a client includes global', () => {
@@ -25,20 +25,48 @@ test('invoke without a prompt is rejected', () => {
   expect(parseInvokePayload({ project: 'bpp' })).toMatchObject({ status: 'error' });
 });
 
-test('answer uses retrieved chunks for that project', async () => {
+test('answer uses retrieved decisions and documents for that project', async () => {
   const retrieve = jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]);
-  const complete = jest.fn().mockResolvedValue('Use a single table.');
-  const result = await answerFromDocuments({
+  const searchDecisions = jest.fn().mockResolvedValue([
+    {
+      project: 'bpp',
+      decisionId: 'abc',
+      title: 'CSV only',
+      content: 'v1 ships CSV.',
+      quote: 'Excel is out of scope.',
+      speaker: 'Marcus Webb',
+      timestamp: '00:00:20.500',
+      loggedAt: '2026-10-15T12:00:00.000Z',
+      sourceKey: 'bpp/transcripts/standup.vtt',
+    },
+  ]);
+  const complete = jest.fn().mockResolvedValue('CSV only. Cite the later loggedAt.');
+  const result = await answerFromMemory({
     prompt: 'RFC 162',
     project: 'bpp',
     retrieve,
+    searchDecisions,
     complete,
   });
   expect(retrieve).toHaveBeenCalledWith({ prompt: 'RFC 162', project: 'bpp' });
+  expect(searchDecisions).toHaveBeenCalledWith({ prompt: 'RFC 162', project: 'bpp' });
   expect(complete).toHaveBeenCalledWith({
     prompt: 'RFC 162',
     project: 'bpp',
     chunks: [{ text: 'single table', uri: 's3://doc/rfc.md' }],
+    decisions: [
+      {
+        project: 'bpp',
+        decisionId: 'abc',
+        title: 'CSV only',
+        content: 'v1 ships CSV.',
+        quote: 'Excel is out of scope.',
+        speaker: 'Marcus Webb',
+        timestamp: '00:00:20.500',
+        loggedAt: '2026-10-15T12:00:00.000Z',
+        sourceKey: 'bpp/transcripts/standup.vtt',
+      },
+    ],
   });
-  expect(result).toEqual({ response: 'Use a single table.', status: 'success' });
+  expect(result).toEqual({ response: 'CSV only. Cite the later loggedAt.', status: 'success' });
 });
