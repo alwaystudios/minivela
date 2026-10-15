@@ -100,6 +100,9 @@ export class MinivelaStack extends cdk.Stack {
       dimension: EMBEDDING_DIMENSIONS,
       distanceMetric: 'cosine',
       vectorBucketArn: vectorBucket.attrVectorBucketArn,
+      metadataConfiguration: {
+        nonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'],
+      },
     });
     vectorIndex.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
 

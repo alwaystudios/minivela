@@ -109,6 +109,9 @@ test('the knowledge base reads the documents bucket only', () => {
     DataType: 'float32',
     Dimension: EMBEDDING_DIMENSIONS,
     DistanceMetric: 'cosine',
+    MetadataConfiguration: {
+      NonFilterableMetadataKeys: ['AMAZON_BEDROCK_TEXT', 'AMAZON_BEDROCK_METADATA'],
+    },
   });
   template.hasResource('AWS::Bedrock::KnowledgeBase', { DeletionPolicy: 'Retain' });
   template.hasResource('AWS::S3Vectors::VectorBucket', { DeletionPolicy: 'Retain' });
