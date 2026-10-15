@@ -15,11 +15,15 @@ export type AnswerResult = {
   status: AnswerStatus;
 };
 
-export function parseInvokePayload(raw: unknown): { prompt: string; project: string } | AnswerResult {
+export type InvokeSkill = 'check-readiness';
+
+export function parseInvokePayload(
+  raw: unknown,
+): { prompt: string; project: string; skill?: InvokeSkill } | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { response: 'Send JSON with prompt and project.', status: 'error' };
   }
-  const body = raw as { prompt?: unknown; project?: unknown };
+  const body = raw as { prompt?: unknown; project?: unknown; skill?: unknown };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   const project = typeof body.project === 'string' ? body.project.trim() : '';
   if (!project) {
@@ -28,7 +32,13 @@ export function parseInvokePayload(raw: unknown): { prompt: string; project: str
   if (!prompt) {
     return { response: 'Ask a question in prompt.', status: 'error' };
   }
-  return { prompt, project };
+  if (body.skill === undefined || body.skill === '') {
+    return { prompt, project };
+  }
+  if (body.skill !== 'check-readiness') {
+    return { response: 'skill must be check-readiness when set.', status: 'error' };
+  }
+  return { prompt, project, skill: 'check-readiness' };
 }
 
 export async function answerFromMemory(input: {

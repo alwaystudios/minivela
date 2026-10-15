@@ -1,8 +1,18 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
-import { DynamoDBClient, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, QueryCommand, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
 import { embedText } from '../embed.js';
+import {
+  loadPartitions,
+  partitionQueryInput,
+  repoPartitions,
+  reposFromQueryItems,
+  rulePartitions,
+  rulesFromQueryItems,
+  type Repo,
+  type Rule,
+} from '../lookup.js';
 import { EXTRACT_MODEL_ID } from '../models.js';
 import {
   decisionsSearchInput,
@@ -12,6 +22,7 @@ import {
   type ScoredDecision,
 } from '../search-decisions.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
+import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
 
 const retrieveClient = new BedrockAgentRuntimeClient({});
 const bedrock = new BedrockRuntimeClient({});
@@ -82,6 +93,30 @@ async function searchDecisions(query: { prompt: string; project: string }): Prom
   }
 }
 
+async function loadRules(project: string): Promise<Rule[]> {
+  return loadPartitions({
+    projects: rulePartitions(project),
+    loadOne: async (partition) => {
+      const result = await dynamodb.send(
+        new QueryCommand(partitionQueryInput(requiredEnv('RULES_TABLE_NAME'), partition)),
+      );
+      return rulesFromQueryItems(result.Items);
+    },
+  });
+}
+
+async function loadRepos(project: string): Promise<Repo[]> {
+  return loadPartitions({
+    projects: repoPartitions(project),
+    loadOne: async (partition) => {
+      const result = await dynamodb.send(
+        new QueryCommand(partitionQueryInput(requiredEnv('REPOS_TABLE_NAME'), partition)),
+      );
+      return reposFromQueryItems(result.Items);
+    },
+  });
+}
+
 async function complete(query: {
   prompt: string;
   project: string;
@@ -132,6 +167,72 @@ async function complete(query: {
   return text;
 }
 
+async function completeReadiness(query: {
+  prompt: string;
+  project: string;
+  chunks: RetrievedChunk[];
+  decisions: RetrievedDecision[];
+  rules: Rule[];
+  repos: Repo[];
+}): Promise<string> {
+  const rulesContext =
+    query.rules.length === 0
+      ? '(no rules loaded)'
+      : query.rules
+          .map((rule, index) => `${index + 1}. rule ${rule.ruleId} project=${rule.project}\n${rule.title}\n${rule.body}`)
+          .join('\n\n');
+  const reposContext =
+    query.repos.length === 0
+      ? '(no repos)'
+      : query.repos
+          .map(
+            (repo, index) =>
+              `${index + 1}. ${repo.owner}/${repo.repo} url=${repo.url}\n${repo.summary}`,
+          )
+          .join('\n\n');
+  const decisionsContext =
+    query.decisions.length === 0
+      ? '(no decisions)'
+      : query.decisions
+          .map(
+            (decision, index) =>
+              `${index + 1}. decision ${decision.decisionId} project=${decision.project} loggedAt=${decision.loggedAt} timestamp=${decision.timestamp} source=${decision.sourceKey}\n${decision.title}\n${decision.content}\nquote: ${decision.quote}`,
+          )
+          .join('\n\n');
+  const documentsContext =
+    query.chunks.length === 0
+      ? '(no documents)'
+      : query.chunks
+          .map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`)
+          .join('\n\n');
+  const response = await bedrock.send(
+    new InvokeModelCommand({
+      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 2048,
+        system: READINESS_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: `project: ${query.project}\nwork: ${query.prompt}\n\nrules:\n${rulesContext}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
+          },
+        ],
+      }),
+    }),
+  );
+  const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
+    content?: Array<{ text?: string }>;
+  };
+  const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
+  if (!text) {
+    throw new Error('answer model returned no text');
+  }
+  return text;
+}
+
 async function handleInvocations(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const rawText = await readBody(req);
   let parsed: unknown = {};
@@ -148,13 +249,24 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     json(res, 400, parsedPayload);
     return;
   }
-  const result = await answerFromMemory({
-    prompt: parsedPayload.prompt,
-    project: parsedPayload.project,
-    retrieve,
-    searchDecisions,
-    complete,
-  });
+  const result =
+    parsedPayload.skill === 'check-readiness'
+      ? await checkReadiness({
+          prompt: parsedPayload.prompt,
+          project: parsedPayload.project,
+          retrieve,
+          searchDecisions,
+          loadRules,
+          loadRepos,
+          complete: completeReadiness,
+        })
+      : await answerFromMemory({
+          prompt: parsedPayload.prompt,
+          project: parsedPayload.project,
+          retrieve,
+          searchDecisions,
+          complete,
+        });
   json(res, 200, result);
 }
 

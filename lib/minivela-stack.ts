@@ -271,6 +271,8 @@ export class MinivelaStack extends cdk.Stack {
         KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
         ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
         DECISIONS_TABLE_NAME: decisions.tableName,
+        RULES_TABLE_NAME: rules.tableName,
+        REPOS_TABLE_NAME: repos.tableName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
     });
@@ -296,6 +298,12 @@ export class MinivelaStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ['dynamodb:SearchVectors'],
         resources: [decisions.tableArn, `${decisions.tableArn}/index/${DECISIONS_VECTOR_INDEX}`],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:Query'],
+        resources: [rules.tableArn, repos.tableArn],
       }),
     );
 
