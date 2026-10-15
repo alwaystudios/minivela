@@ -189,6 +189,9 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'KnowledgeBaseId', {
       value: knowledgeBase.attrKnowledgeBaseId,
     });
+    new cdk.CfnOutput(this, 'DocumentsDataSourceId', {
+      value: documentsDataSource.attrDataSourceId,
+    });
     new cdk.CfnOutput(this, 'DecisionsTableName', {
       value: decisions.tableName,
     });

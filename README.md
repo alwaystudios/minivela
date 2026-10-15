@@ -24,4 +24,4 @@ aws s3 cp standup.vtt s3://<transcripts-bucket>/demo/transcripts/standup.vtt --p
 
 That starts extraction. Decisions are stored in DynamoDB. The file stays in the transcripts bucket.
 
-The documents bucket is the knowledge base. Put markdown there, with a sidecar beside each file. Transcripts do not go in that bucket.
+The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file, then start an ingestion job. Deploy prints the knowledge base id and the data source id. Transcripts do not go in that bucket.
