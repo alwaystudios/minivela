@@ -16,7 +16,7 @@ test('the stack name defaults to minivela and a transcript put can write a decis
 
   expect(stack.stackName).toBe('minivela');
   template.resourceCountIs('AWS::S3::Bucket', 2);
-  template.resourceCountIs('AWS::DynamoDB::Table', 3);
+  template.resourceCountIs('AWS::DynamoDB::Table', 4);
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     BillingMode: 'PAY_PER_REQUEST',
@@ -59,6 +59,18 @@ test('the stack name defaults to minivela and a transcript put can write a decis
   );
   expect(rulesTable).toBeDefined();
   expect(rulesTable?.Properties.VectorIndexes).toBeUndefined();
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'project', KeyType: 'HASH' },
+      { AttributeName: 'draftId', KeyType: 'RANGE' },
+    ],
+  });
+  const draftsTable = Object.values(tables).find((table) =>
+    JSON.stringify(table.Properties.KeySchema).includes('draftId'),
+  );
+  expect(draftsTable).toBeDefined();
+  expect(draftsTable?.Properties.VectorIndexes).toBeUndefined();
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::SQS::Queue', {
     MessageRetentionPeriod: 14 * 24 * 60 * 60,
@@ -195,12 +207,14 @@ test('the knowledge base reads the documents bucket only', () => {
       DECISIONS_TABLE_NAME: Match.anyValue(),
       RULES_TABLE_NAME: Match.anyValue(),
       REPOS_TABLE_NAME: Match.anyValue(),
+      DRAFTS_TABLE_NAME: Match.anyValue(),
     }),
   });
   const templateJson = JSON.stringify(template.toJSON());
   expect(templateJson).toContain('bedrock:Retrieve');
   expect(templateJson).toContain('dynamodb:SearchVectors');
   expect(templateJson).toContain('dynamodb:Query');
+  expect(templateJson).toContain('dynamodb:PutItem');
   expect(templateJson).toContain(`/index/${DECISIONS_VECTOR_INDEX}`);
 });
 
