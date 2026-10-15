@@ -36,3 +36,15 @@ aws bedrock-agent-runtime retrieve \
   --profile my-profile \
   --region us-east-1
 ```
+
+Deploy prints `ReposTableName`. The repo map is DynamoDB, queried by project. It is not a knowledge base data source. `project` is a reserved word, so the query aliases it.
+
+```bash
+aws dynamodb query \
+  --table-name <repos-table-name> \
+  --key-condition-expression '#p = :p' \
+  --expression-attribute-names '{"#p":"project"}' \
+  --expression-attribute-values '{":p":{"S":"demo"}}' \
+  --profile my-profile \
+  --region us-east-1
+```

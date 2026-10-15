@@ -30,6 +30,13 @@ export class MinivelaStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    const repos = new dynamodb.Table(this, 'Repos', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'repoId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
     const cfnDecisions = decisions.node.defaultChild as dynamodb.CfnTable;
     cfnDecisions.vectorIndexes = [
       {
@@ -239,6 +246,10 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'DecisionsTableName', {
       value: decisions.tableName,
+    });
+    new cdk.CfnOutput(this, 'ReposTableName', {
+      value: repos.tableName,
+      description: 'Repo map. Query by project. Each item is owner, repo, url, summary.',
     });
   }
 }
