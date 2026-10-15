@@ -41,6 +41,13 @@ export class MinivelaStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    const rules = new dynamodb.Table(this, 'Rules', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'ruleId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
     const cfnDecisions = decisions.node.defaultChild as dynamodb.CfnTable;
     cfnDecisions.vectorIndexes = [
       {
@@ -312,6 +319,10 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ReposTableName', {
       value: repos.tableName,
       description: 'Repo map. Query by project. Each item is owner, repo, url, summary.',
+    });
+    new cdk.CfnOutput(this, 'RulesTableName', {
+      value: rules.tableName,
+      description: 'Hard rules. Query global on every skill. Each item is ruleId, title, body. No vectors.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,
