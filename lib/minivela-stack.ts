@@ -1,5 +1,8 @@
+import * as path from 'node:path';
+import * as esbuild from 'esbuild';
 import * as cdk from 'aws-cdk-lib/core';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
+import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -230,6 +233,56 @@ export class MinivelaStack extends cdk.Stack {
     );
     documents.addEventNotification(s3.EventType.OBJECT_CREATED, new s3n.SqsDestination(ingestDocumentsQueue));
 
+    const agentArtifact = agentcore.AgentRuntimeArtifact.fromCodeAsset({
+      path: path.join(process.cwd(), 'lib/agent'),
+      runtime: agentcore.AgentCoreRuntime.NODE_22,
+      entrypoint: ['index.js'],
+      bundling: {
+        image: cdk.DockerImage.fromRegistry('public.ecr.aws/sam/build-nodejs22.x'),
+        local: {
+          tryBundle(outputDir: string): boolean {
+            esbuild.buildSync({
+              entryPoints: [path.join(process.cwd(), 'lib/agent/server.ts')],
+              bundle: true,
+              platform: 'node',
+              format: 'cjs',
+              outfile: path.join(outputDir, 'index.js'),
+            });
+            return true;
+          },
+        },
+        command: ['bash', '-c', 'echo docker bundling is not used && exit 1'],
+      },
+    });
+    const runtimeName = `${this.stackName.replace(/-/g, '_')}_agent`;
+    const agent = new agentcore.Runtime(this, 'Agent', {
+      runtimeName,
+      description: 'Talk to minivela. Pass project on every invoke. The agent retrieves that client only.',
+      agentRuntimeArtifact: agentArtifact,
+      environmentVariables: {
+        KNOWLEDGE_BASE_ID: knowledgeBase.attrKnowledgeBaseId,
+        ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
+      },
+      authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
+    });
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:Retrieve'],
+        resources: [knowledgeBase.attrKnowledgeBaseArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/${EXTRACT_MODEL_ID}`,
+          ...BEDROCK_REGIONS.map(
+            (region) => `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-sonnet-4-6*`,
+          ),
+        ],
+      }),
+    );
+
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,
       description: 'Drop a .vtt file at <project>/transcripts/<meeting>.vtt',
@@ -250,6 +303,10 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ReposTableName', {
       value: repos.tableName,
       description: 'Repo map. Query by project. Each item is owner, repo, url, summary.',
+    });
+    new cdk.CfnOutput(this, 'AgentRuntimeArn', {
+      value: agent.agentRuntimeArn,
+      description: 'Talk to minivela here. Pass prompt and project. IAM auth.',
     });
   }
 }

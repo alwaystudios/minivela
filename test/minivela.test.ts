@@ -1,7 +1,7 @@
 import * as cdk from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { createApp } from '../lib/app.js';
-import { BEDROCK_REGIONS, EMBEDDING_DIMENSIONS } from '../lib/models.js';
+import { BEDROCK_REGIONS, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from '../lib/models.js';
 import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
 
 function stackOf(app: cdk.App, name: string): cdk.Stack {
@@ -172,6 +172,17 @@ test('the knowledge base reads the documents bucket only', () => {
   );
   expect(documentNotifications).toHaveLength(1);
   expect(JSON.stringify(documentNotifications[0].Properties.NotificationConfiguration)).toContain('QueueConfigurations');
+
+  template.hasResourceProperties('AWS::BedrockAgentCore::Runtime', {
+    AgentRuntimeName: 'minivela_agent',
+    ProtocolConfiguration: 'HTTP',
+    EnvironmentVariables: Match.objectLike({
+      KNOWLEDGE_BASE_ID: Match.anyValue(),
+      ANSWER_MODEL_ID: EXTRACT_MODEL_ID,
+    }),
+  });
+  const templateJson = JSON.stringify(template.toJSON());
+  expect(templateJson).toContain('bedrock:Retrieve');
 });
 
 test('stackName context overrides the CloudFormation stack name', () => {
