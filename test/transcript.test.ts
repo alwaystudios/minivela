@@ -61,11 +61,11 @@ test('a cue with no speaker keeps an empty speaker', () => {
 });
 
 test('project comes from the transcripts prefix', () => {
-  expect(projectFromTranscriptKey('learn/transcripts/standup.vtt')).toBe('learn');
+  expect(projectFromTranscriptKey('demo/transcripts/standup.vtt')).toBe('demo');
   expect(projectFromTranscriptKey('global/transcripts/all-hands.vtt')).toBe('global');
-  expect(projectFromTranscriptKey(decodeS3Key('learn/transcripts/sprint%20review.vtt'))).toBe('learn');
-  expect(projectFromTranscriptKey('learn/jira/LEARN-1.vtt')).toBeUndefined();
-  expect(projectFromTranscriptKey('learn/transcripts/nested/standup.vtt')).toBeUndefined();
+  expect(projectFromTranscriptKey(decodeS3Key('demo/transcripts/sprint%20review.vtt'))).toBe('demo');
+  expect(projectFromTranscriptKey('demo/jira/DEMO-1.vtt')).toBeUndefined();
+  expect(projectFromTranscriptKey('demo/transcripts/nested/standup.vtt')).toBeUndefined();
   expect(projectFromTranscriptKey('transcripts/standup.vtt')).toBeUndefined();
 });
 
@@ -98,7 +98,7 @@ test('model summary and actions are discarded, and the cue supplies speaker and 
   const written: DecisionWrite[] = [];
 
   const result = await processTranscriptObject({
-    key: 'learn/transcripts/standup.vtt',
+    key: 'demo/transcripts/standup.vtt',
     body: MEETING,
     loggedAt: '2026-10-15T11:00:00.000Z',
     systemPrompt: 'system',
@@ -114,15 +114,15 @@ test('model summary and actions are discarded, and the cue supplies speaker and 
   expect(extract).toHaveBeenCalledTimes(1);
   expect(written).toEqual([
     {
-      project: 'learn',
-      decisionId: decisionIdFor('learn/transcripts/standup.vtt', DECISION_QUOTE),
+      project: 'demo',
+      decisionId: decisionIdFor('demo/transcripts/standup.vtt', DECISION_QUOTE),
       title: 'CSV-only v1 scope',
       content: 'v1 ships CSV export only; Excel export is out of scope for v1.',
       quote: DECISION_QUOTE,
       speaker: 'Marcus Webb',
       timestamp: '00:00:20.500',
       loggedAt: '2026-10-15T11:00:00.000Z',
-      sourceKey: 'learn/transcripts/standup.vtt',
+      sourceKey: 'demo/transcripts/standup.vtt',
       embedding: Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.1),
     },
   ]);
@@ -155,7 +155,7 @@ test('a global transcript is stored under project global', async () => {
 test('a quote that is not one cue is dropped, and an ungrounded file writes nothing', async () => {
   const embed = jest.fn();
   const result = await processTranscriptObject({
-    key: 'learn/transcripts/standup.vtt',
+    key: 'demo/transcripts/standup.vtt',
     body: MEETING,
     loggedAt: '2026-10-15T11:00:00.000Z',
     systemPrompt: 'system',
@@ -178,7 +178,7 @@ test('a quote that is not one cue is dropped, and an ungrounded file writes noth
 test('objects outside the transcripts prefix are ignored', async () => {
   const extract = jest.fn();
   const result = await processTranscriptObject({
-    key: 'learn/jira/LEARN-1.vtt',
+    key: 'demo/jira/DEMO-1.vtt',
     body: MEETING,
     loggedAt: '2026-10-15T11:00:00.000Z',
     systemPrompt: 'system',
@@ -193,11 +193,11 @@ test('objects outside the transcripts prefix are ignored', async () => {
 });
 
 test('the same file and quote keep the same decision id', () => {
-  expect(decisionIdFor('learn/transcripts/standup.vtt', DECISION_QUOTE)).toBe(
-    decisionIdFor('learn/transcripts/standup.vtt', DECISION_QUOTE),
+  expect(decisionIdFor('demo/transcripts/standup.vtt', DECISION_QUOTE)).toBe(
+    decisionIdFor('demo/transcripts/standup.vtt', DECISION_QUOTE),
   );
-  expect(decisionIdFor('learn/transcripts/standup.vtt', DECISION_QUOTE)).not.toBe(
-    decisionIdFor('learn/transcripts/other.vtt', DECISION_QUOTE),
+  expect(decisionIdFor('demo/transcripts/standup.vtt', DECISION_QUOTE)).not.toBe(
+    decisionIdFor('demo/transcripts/other.vtt', DECISION_QUOTE),
   );
 });
 
