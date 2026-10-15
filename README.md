@@ -26,7 +26,21 @@ That starts extraction. Decisions are stored in DynamoDB. The file stays in the 
 
 The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file. A put starts one ingestion job after a short wait, so a burst of files is one sync. Transcripts do not go in that bucket.
 
-Deploy prints `KnowledgeBaseId`. Retrieve with a client filter. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
+Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `prompt` and `project` on every invoke. The agent retrieves that client plus `global`. It will not search without a project.
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <agent-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"prompt":"what did we decide about export format","project":"demo"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  outfile.json
+```
+
+Deploy prints `KnowledgeBaseId`. Direct retrieve is for debugging the index. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
 
 ```bash
 aws bedrock-agent-runtime retrieve \
