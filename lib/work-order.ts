@@ -1,4 +1,4 @@
-import type { Repo } from './lookup.js';
+import type { Repo, Rule } from './lookup.js';
 
 export type WorkOrderRepo = {
   owner: string;
@@ -12,6 +12,7 @@ export type WorkOrder = {
   repos: WorkOrderRepo[];
   constraints: string[];
   acceptance: string[];
+  rules: Rule[];
   project?: string;
 };
 
@@ -39,6 +40,7 @@ export function parseDraftModelText(
     repos: Repo[];
     decisions: Array<{ decisionId: string }>;
     chunks: Array<{ uri?: string }>;
+    rules: Rule[];
   },
 ): DraftParse {
   const parsed = parseJsonObject(text);
@@ -72,6 +74,7 @@ export function parseDraftModelText(
     repos,
     constraints,
     acceptance,
+    rules: input.rules,
     project: input.project,
   };
   return { ok: true, workOrder, citations };

@@ -54,6 +54,7 @@ export async function draftWorkOrder(input: {
     repos,
     decisions,
     chunks,
+    rules,
   });
   if (!parsed.ok) {
     return { response: parsed.response, status: 'success' };

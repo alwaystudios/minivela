@@ -202,7 +202,14 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
         sourceKey: 'acme/transcripts/standup.vtt',
       },
     ]),
-    loadRules: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([
+      {
+        project: 'global',
+        ruleId: 'function-comment',
+        title: 'Comment every function',
+        body: 'Always start a function with a comment.',
+      },
+    ]),
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
     put,
@@ -219,6 +226,14 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: ['Match existing patterns in acme/web.'],
       acceptance: ['Query path covered by a test.'],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
       project: 'acme',
     },
     citations: { decisionIds: ['abc'], documentUris: ['s3://doc/rfc.md'] },

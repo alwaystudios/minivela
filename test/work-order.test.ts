@@ -17,6 +17,14 @@ test('a fenced work order is kept and unknown citations are dropped', () => {
       repos: [web],
       decisions: [{ decisionId: 'kept' }],
       chunks: [{ uri: 's3://doc/rfc.md' }],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
     },
   );
   expect(parsed).toEqual({
@@ -27,6 +35,14 @@ test('a fenced work order is kept and unknown citations are dropped', () => {
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: ['Small diffs.'],
       acceptance: ['A test covers it.'],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
       project: 'acme',
     },
     citations: { decisionIds: ['kept'], documentUris: ['s3://doc/rfc.md'] },
@@ -34,7 +50,7 @@ test('a fenced work order is kept and unknown citations are dropped', () => {
 });
 
 test('garbage text is not a work order', () => {
-  expect(parseDraftModelText('not json', { project: 'acme', repos: [web], decisions: [], chunks: [] })).toEqual({
+  expect(parseDraftModelText('not json', { project: 'acme', repos: [web], decisions: [], chunks: [], rules: [] })).toEqual({
     ok: false,
     response: 'The model did not return a work order.',
   });

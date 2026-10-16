@@ -348,7 +348,7 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'DraftsTableName', {
       value: drafts.tableName,
-      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt.',
+      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,
