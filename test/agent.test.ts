@@ -1,5 +1,5 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
-import { readTicketMarkdown } from '../lib/ticket.js';
+import { promptForInvoke, readTicketMarkdown } from '../lib/ticket.js';
 import { DRAFT_SYSTEM_PROMPT, draftWorkOrder, readWorkOrder } from '../lib/agent/draft.js';
 import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
@@ -101,7 +101,6 @@ test('a fetch rejects a prompt or a skill', () => {
 
 test('a ticket key is accepted with or without a prompt', () => {
   expect(parseInvokePayload({ project: 'acme', ticket: 'ACME-12', skill: 'draft-work-order' })).toEqual({
-    prompt: 'ACME-12',
     project: 'acme',
     skill: 'draft-work-order',
     ticket: 'ACME-12',
@@ -119,6 +118,12 @@ test('a ticket key is accepted with or without a prompt', () => {
     skill: 'draft-work-order',
     ticket: 'ACME-12',
   });
+});
+
+test('a ticket file fills the prompt when the caller did not send one', () => {
+  const ticketText = '# ACME-12\n\nRepro path and Figma link.';
+  expect(promptForInvoke(undefined, ticketText)).toBe(ticketText);
+  expect(promptForInvoke('match the loading state', ticketText)).toBe('match the loading state');
 });
 
 test('a ticket key that is not a key is rejected', () => {
@@ -478,17 +483,18 @@ test('read by id misses a draft that is not stored', async () => {
 
 test('a ticket file is the document and the knowledge base is not retrieved', async () => {
   const retrieve = jest.fn();
+  const searchDecisions = jest.fn().mockResolvedValue([]);
   const put = jest.fn().mockResolvedValue(undefined);
   const ticketDocument = {
     text: '# ACME-12\n\nRepro path and Figma link.',
     uri: 's3://docs/acme/jira/ACME-12.md',
   };
   const result = await draftWorkOrder({
-    prompt: 'ACME-12',
+    prompt: ticketDocument.text,
     project: 'acme',
     ticketDocument,
     retrieve,
-    searchDecisions: jest.fn().mockResolvedValue([]),
+    searchDecisions,
     loadRules: jest.fn().mockResolvedValue([]),
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
@@ -497,6 +503,7 @@ test('a ticket file is the document and the knowledge base is not retrieved', as
     createdAt: '2026-10-15T21:00:00.000Z',
   });
   expect(retrieve).not.toHaveBeenCalled();
+  expect(searchDecisions).toHaveBeenCalledWith({ prompt: ticketDocument.text, project: 'acme' });
   expect(put).toHaveBeenCalled();
   expect(result.status).toBe('success');
 });

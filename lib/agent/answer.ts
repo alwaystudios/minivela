@@ -22,7 +22,7 @@ export type InvokeSkill = 'check-readiness' | 'draft-work-order';
 export function parseInvokePayload(
   raw: unknown,
 ):
-  | { prompt: string; project: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
+  | { project: string; prompt?: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
   | { project: string; draftId: string; format?: DraftResponseFormat }
   | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -71,22 +71,34 @@ export function parseInvokePayload(
     return { response: 'skill must be check-readiness or draft-work-order when set.', status: 'error' };
   }
   const skill = body.skill === 'check-readiness' || body.skill === 'draft-work-order' ? body.skill : undefined;
-  const question = prompt || ticket;
   if (format === undefined) {
+    if (skill && ticket && prompt) {
+      return { prompt, project, skill, ticket };
+    }
     if (skill && ticket) {
-      return { prompt: question, project, skill, ticket };
+      return { project, skill, ticket };
     }
     if (skill) {
-      return { prompt: question, project, skill };
+      return { prompt, project, skill };
     }
-    return ticket ? { prompt: question, project, ticket } : { prompt: question, project };
+    if (ticket && prompt) {
+      return { prompt, project, ticket };
+    }
+    if (ticket) {
+      return { project, ticket };
+    }
+    return { prompt, project };
   }
   if (skill !== 'draft-work-order') {
     return { response: 'format is only valid with skill draft-work-order.', status: 'error' };
   }
-  return ticket
-    ? { prompt: question, project, skill, format, ticket }
-    : { prompt: question, project, skill, format };
+  if (ticket && prompt) {
+    return { prompt, project, skill, format, ticket };
+  }
+  if (ticket) {
+    return { project, skill, format, ticket };
+  }
+  return { prompt, project, skill, format };
 }
 
 function parseFormat(value: unknown): DraftResponseFormat | undefined | AnswerResult {

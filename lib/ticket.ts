@@ -8,6 +8,14 @@ export function ticketObjectKey(project: string, ticket: string): string {
   return `${project}/jira/${ticket}.md`;
 }
 
+export function promptForInvoke(prompt: string | undefined, ticketText: string | undefined): string {
+  const question = prompt?.trim() ?? '';
+  if (question) {
+    return question;
+  }
+  return ticketText?.trim() ?? '';
+}
+
 export async function readTicketMarkdown(input: {
   bucket: string;
   project: string;

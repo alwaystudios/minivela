@@ -26,7 +26,7 @@ import {
   type ScoredDecision,
 } from '../search-decisions.js';
 import type { DraftWrite } from '../work-order.js';
-import { readTicketMarkdown } from '../ticket.js';
+import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
 import { draftWorkOrder, DRAFT_SYSTEM_PROMPT, readWorkOrder } from './draft.js';
 import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
@@ -414,10 +414,11 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     }
     ticketDocument = loaded.chunk;
   }
+  const prompt = promptForInvoke(parsedPayload.prompt, ticketDocument?.text);
   const result =
     parsedPayload.skill === 'check-readiness'
       ? await checkReadiness({
-          prompt: parsedPayload.prompt,
+          prompt,
           project: parsedPayload.project,
           ticketDocument,
           retrieve,
@@ -428,7 +429,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
         })
       : parsedPayload.skill === 'draft-work-order'
         ? await draftWorkOrder({
-            prompt: parsedPayload.prompt,
+            prompt,
             project: parsedPayload.project,
             ticketDocument,
             retrieve,
@@ -442,7 +443,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             format: parsedPayload.format,
           })
         : await answerFromMemory({
-            prompt: parsedPayload.prompt,
+            prompt,
             project: parsedPayload.project,
             ticketDocument,
             retrieve,
