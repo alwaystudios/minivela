@@ -413,7 +413,7 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule in the summary, the acceptance, or the constraints, including a paraphrase.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy repro steps, links, and named files from the source into the summary.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not invent how the change is made.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('Include a repo only when the source says to change it.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('If it names none, infer the target from the repo map.');
 });
 
 const storedDraft = {
