@@ -208,8 +208,19 @@ test('the knowledge base reads the documents bucket only', () => {
       RULES_TABLE_NAME: Match.anyValue(),
       REPOS_TABLE_NAME: Match.anyValue(),
       DRAFTS_TABLE_NAME: Match.anyValue(),
+      DOCUMENTS_BUCKET_NAME: Match.anyValue(),
     }),
   });
+  const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as {
+    Properties: { RoleArn: { 'Fn::GetAtt': string[] } };
+  };
+  const agentRoleId = runtime.Properties.RoleArn['Fn::GetAtt'][0];
+  const agentPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
+    JSON.stringify(policy.Properties.Roles).includes(agentRoleId),
+  );
+  const agentPolicy = JSON.stringify(agentPolicies);
+  expect(agentPolicy).toContain('s3:GetObject');
+  expect(agentPolicy).toContain(documentsBucketId);
   const templateJson = JSON.stringify(template.toJSON());
   expect(templateJson).toContain('bedrock:Retrieve');
   expect(templateJson).toContain('dynamodb:SearchVectors');

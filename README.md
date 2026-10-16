@@ -26,9 +26,9 @@ That starts extraction. Decisions are stored in DynamoDB. The file stays in the 
 
 The documents bucket is the knowledge base data source. Put markdown there, with a sidecar beside each file. A put starts one ingestion job after a short wait, so a burst of files is one sync. Transcripts do not go in that bucket.
 
-Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `prompt` and `project` on every invoke. The agent retrieves that client plus `global`, and searches transcript decisions the same way. Close decisions overrule documents. A documents question still works if search finds nothing. It will not search without a project.
+Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `project` on every invoke. Pass `prompt` to retrieve that client plus `global`, and to search transcript decisions the same way. Pass `ticket` to read `<project>/jira/<ticket>.md` from the documents bucket and use that whole file. A missing object is an error. The agent does not search the knowledge base for the key. Close decisions overrule documents. A documents question still works if search finds nothing. It will not search without a project.
 
-Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. Both paths load global rules and that client's repo map. Omit `skill` for a normal question. The draft names repos from that map only. DynamoDB always stores that draft as JSON. The command writes a JSON file, and the draft is the `response` string inside it. Omit `format` for that stored JSON. Set `format` to `markdown` for the same draft as an agent prompt. Pass `draftId` with `project` to fetch a stored draft. Omit `prompt` and `skill` on a fetch. A fetch does not write a row.
+Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. Both paths load global rules and that client's repo map. Omit `skill` for a normal question. The draft names repos from that map only. DynamoDB always stores that draft as JSON. The command writes a JSON file, and the draft is the `response` string inside it. Omit `format` for that stored JSON. Set `format` to `markdown` for the same draft as an agent prompt. Pass `draftId` with `project` to fetch a stored draft. Omit `prompt`, `skill`, and `ticket` on a fetch. A fetch does not write a row.
 
 Prove decision search with a `.vtt` at `<project>/transcripts/<meeting>.vtt`, then ask about that meeting. `test/fixtures/csv-export.vtt` is one such file.
 
@@ -64,6 +64,19 @@ aws bedrock-agentcore invoke-agent-runtime \
   --agent-runtime-arn <agent-runtime-arn> \
   --runtime-session-id "$SESSION" \
   --payload '{"prompt":"add CSV export","project":"acme","skill":"draft-work-order"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  --cli-binary-format raw-in-base64-out \
+  outfile.json
+```
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <agent-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"ticket":"ACME-12","project":"acme","skill":"draft-work-order"}' \
   --qualifier DEFAULT \
   --profile my-profile \
   --region us-east-1 \
