@@ -219,6 +219,7 @@ test('the knowledge base reads the documents bucket only', () => {
     JSON.stringify(policy.Properties.Roles).includes(agentRoleId),
   );
   const agentPolicy = JSON.stringify(agentPolicies);
+  expect(agentPolicy).toContain('s3:ListBucket');
   expect(agentPolicy).toContain('s3:GetObject');
   expect(agentPolicy).toContain(documentsBucketId);
   const templateJson = JSON.stringify(template.toJSON());

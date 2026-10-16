@@ -293,6 +293,12 @@ export class MinivelaStack extends cdk.Stack {
     );
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [documents.bucketArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         actions: ['s3:GetObject'],
         resources: [documents.arnForObjects('*')],
       }),
