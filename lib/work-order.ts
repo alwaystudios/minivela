@@ -319,12 +319,7 @@ function sourceAnchors(text: string): string[] {
     seen.add(trimmed);
     anchors.push(trimmed);
   };
-  for (const match of text.matchAll(/\((https?:\/\/[^)\s]+)\)/g)) {
-    add(match[1]);
-  }
-  for (const match of text.matchAll(/https?:\/\/[^\s<>)\]]+/g)) {
-    add(match[0].replace(/[.,;:]+$/, ''));
-  }
+  addUrls(text, add);
   for (const match of text.matchAll(/!\[([^\]]+)\]\(([^)\s]+)\)/g)) {
     const alt = match[1].trim();
     if (FILE_EXT.test(alt)) {
@@ -354,6 +349,22 @@ function sourceAnchors(text: string): string[] {
 
 const FILE_EXT = /\.(?:png|jpe?g|webp|gif|pdf)$/i;
 
+function addUrls(text: string, add: (value: string) => void): void {
+  for (const match of text.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) {
+    add(match[1]);
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const closer = line.indexOf('](');
+    for (const match of line.matchAll(/https?:\/\/[^\s<>)\]]+/g)) {
+      const index = match.index ?? 0;
+      if (closer !== -1 && index < closer && line.lastIndexOf('[', index) !== -1) {
+        continue;
+      }
+      add(match[0].replace(/[.,;:]+$/, ''));
+    }
+  }
+}
+
 function stepLines(text: string): string[] {
   const steps: string[] = [];
   let inSteps = false;
@@ -382,18 +393,8 @@ function stepLines(text: string): string[] {
   return steps;
 }
 
-function sourceMaterial(input: {
-  prompt?: string;
-  chunks: Array<{ text?: string }>;
-  decisions: Array<{ title?: string; content?: string; quote?: string }>;
-}): string {
-  return [
-    input.prompt ?? '',
-    ...input.chunks.map((chunk) => chunk.text ?? ''),
-    ...input.decisions.flatMap((decision) => [decision.title ?? '', decision.content ?? '', decision.quote ?? '']),
-  ]
-    .filter((part) => part.trim().length > 0)
-    .join('\n');
+function sourceMaterial(input: { prompt?: string }): string {
+  return input.prompt ?? '';
 }
 
 function restatesRule(constraint: string, rules: Rule[]): boolean {

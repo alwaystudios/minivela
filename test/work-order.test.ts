@@ -324,6 +324,7 @@ test('a draft keeps source links, file names, and repro steps', () => {
     '- Choose CSV',
     '',
     'Design: https://example.com/designs/export',
+    '[https://example.com/findings?filters=["CSV"]](https://example.com/findings?filters=%5B%22CSV%22%5D)',
     '![Shot 2026-10-01 at 15.18.04.png](shots/shot_2026-10-01.png)',
   ].join('\n');
   const parsed = parseDraftModelText(
@@ -341,8 +342,20 @@ test('a draft keeps source links, file names, and repro steps', () => {
       project: 'acme',
       prompt: source,
       repos: [web],
-      decisions: [],
-      chunks: [{ text: source, uri: 's3://docs/acme/jira/ACME-12.md' }],
+      decisions: [
+        {
+          decisionId: 'other',
+          title: 'Elsewhere',
+          content: 'https://example.com/decision',
+          quote: 'Leave this decision out.',
+        },
+      ],
+      chunks: [
+        {
+          text: ['**Steps**', '- Ignore this handbook step', '', 'https://example.com/handbook'].join('\n'),
+          uri: 's3://docs/global/handbook.md',
+        },
+      ],
       rules: [
         {
           project: 'global',
@@ -359,6 +372,11 @@ test('a draft keeps source links, file names, and repro steps', () => {
   }
   expect(parsed.workOrder.summary).toContain('Update the libraries in acme/web.');
   expect(parsed.workOrder.summary).toContain('https://example.com/designs/export');
+  expect(parsed.workOrder.summary).toContain('https://example.com/findings?filters=%5B%22CSV%22%5D');
+  expect(parsed.workOrder.summary).not.toContain('filters=["CSV"');
+  expect(parsed.workOrder.summary).not.toContain('https://example.com/handbook');
+  expect(parsed.workOrder.summary).not.toContain('https://example.com/decision');
+  expect(parsed.workOrder.summary).not.toContain('Ignore this handbook step');
   expect(parsed.workOrder.summary).toContain('Shot 2026-10-01 at 15.18.04.png');
   expect(parsed.workOrder.summary).toContain('shot_2026-10-01.png');
   expect(parsed.workOrder.summary).not.toContain('\n15.18.04.png');
