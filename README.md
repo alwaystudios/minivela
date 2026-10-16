@@ -49,7 +49,7 @@ SESSION=$(uuidgen)
 aws bedrock-agentcore invoke-agent-runtime \
   --agent-runtime-arn <agent-runtime-arn> \
   --runtime-session-id "$SESSION" \
-  --payload '{"prompt":"single-table DynamoDB for JOIN applications","project":"bpp","skill":"check-readiness"}' \
+  --payload '{"prompt":"add CSV export","project":"acme","skill":"check-readiness"}' \
   --qualifier DEFAULT \
   --profile my-profile \
   --region us-east-1 \
@@ -61,7 +61,7 @@ SESSION=$(uuidgen)
 aws bedrock-agentcore invoke-agent-runtime \
   --agent-runtime-arn <agent-runtime-arn> \
   --runtime-session-id "$SESSION" \
-  --payload '{"prompt":"single-table DynamoDB for JOIN applications","project":"bpp","skill":"draft-work-order"}' \
+  --payload '{"prompt":"add CSV export","project":"acme","skill":"draft-work-order"}' \
   --qualifier DEFAULT \
   --profile my-profile \
   --region us-east-1 \

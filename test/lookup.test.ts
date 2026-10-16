@@ -18,12 +18,12 @@ test('a partition query aliases the reserved project name', () => {
 });
 
 test('rules load global first, then the client', () => {
-  expect(rulePartitions('bpp')).toEqual(['global', 'bpp']);
+  expect(rulePartitions('acme')).toEqual(['global', 'acme']);
   expect(rulePartitions('global')).toEqual(['global']);
 });
 
 test('repos load the requested client only', () => {
-  expect(repoPartitions('bpp')).toEqual(['bpp']);
+  expect(repoPartitions('acme')).toEqual(['acme']);
   expect(repoPartitions('global')).toEqual(['global']);
 });
 
@@ -45,13 +45,13 @@ test('a complete rule is kept and an incomplete one is dropped', () => {
 
 test('a complete repo is kept and an incomplete one is dropped', () => {
   const kept = repoFromItem({
-    project: { S: 'bpp' },
-    repoId: { S: 'bpp/learn' },
-    owner: { S: 'bpp' },
-    repo: { S: 'learn' },
-    url: { S: 'https://github.com/bpp/learn' },
-    summary: { S: 'Learner app.' },
+    project: { S: 'acme' },
+    repoId: { S: 'acme/web' },
+    owner: { S: 'acme' },
+    repo: { S: 'web' },
+    url: { S: 'https://github.com/acme/web' },
+    summary: { S: 'Web app.' },
   });
-  expect(kept?.repoId).toBe('bpp/learn');
-  expect(reposFromQueryItems([{ owner: { S: 'bpp' } }])).toEqual([]);
+  expect(kept?.repoId).toBe('acme/web');
+  expect(reposFromQueryItems([{ owner: { S: 'acme' } }])).toEqual([]);
 });
