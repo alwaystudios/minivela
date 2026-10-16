@@ -1,6 +1,6 @@
 import type { RetrievedDecision } from '../search-decisions.js';
 import type { Repo, Rule } from '../lookup.js';
-import { parseDraftModelText, type DraftWrite } from '../work-order.js';
+import { parseDraftModelText, RULE_PRECEDENCE, type DraftWrite } from '../work-order.js';
 import type { AnswerResult, RetrievedChunk } from './answer.js';
 
 export async function draftWorkOrder(input: {
@@ -27,20 +27,23 @@ export async function draftWorkOrder(input: {
     console.error(error);
     return [];
   });
-  const rulesPromise = input.loadRules(input.project).catch((error) => {
-    console.error(error);
-    return [];
-  });
+  const rulesPromise = input.loadRules(input.project);
   const reposPromise = input.loadRepos(input.project).catch((error) => {
     console.error(error);
     return [];
   });
-  const [chunks, decisions, rules, repos] = await Promise.all([
+  const [chunks, decisions, repos] = await Promise.all([
     chunksPromise,
     decisionsPromise,
-    rulesPromise,
     reposPromise,
   ]);
+  let rules: Rule[];
+  try {
+    rules = await rulesPromise;
+  } catch (error) {
+    console.error(error);
+    return { response: 'Rules failed to load.', status: 'success' };
+  }
   const text = await input.complete({
     prompt: input.prompt,
     project: input.project,
@@ -71,4 +74,4 @@ export async function draftWorkOrder(input: {
 }
 
 export const DRAFT_SYSTEM_PROMPT =
-  'You draft a work order from the rules, decisions, documents, and repos provided. Return JSON only. If you can draft, return {"intent":"","summary":"","repos":[{"owner":"","repo":""}],"constraints":[""],"acceptance":[""],"citations":{"decisionIds":[],"documentUris":[]}}. Optional paths on a repo if the work is a subtree. If you cannot draft, return {"blocked":"why"}. Use only the provided material. Global rules always apply; a client rule may add but cannot drop a global rule. Decisions overrule documents. Project decisions beat global decisions. Do not invent a ticket, path, or repo that is not in the repo list. Repos must be owner/repo pairs from that list. constraints and acceptance must be non-empty arrays. intent is the change in one line. summary is what to do and why. If rules failed to load, blocked.';
+  `You draft a work order from the rules, decisions, documents, and repos provided. Return JSON only. If you can draft, return {"intent":"","summary":"","repos":[{"owner":"","repo":""}],"constraints":[""],"acceptance":[""],"citations":{"decisionIds":[],"documentUris":[]}}. Optional paths on a repo if the work is a subtree. If you cannot draft, return {"blocked":"why"}. Use only the provided material. ${RULE_PRECEDENCE} Decisions overrule documents. Project decisions beat global decisions. Do not invent a ticket, path, or repo that is not in the repo list. Repos must be owner/repo pairs from that list. constraints and acceptance must be non-empty arrays. intent is the change in one line. summary is what to do and why. If rules failed to load, blocked.`;

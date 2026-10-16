@@ -1,4 +1,5 @@
 import {
+  loadPartitions,
   partitionQueryInput,
   repoFromItem,
   repoPartitions,
@@ -20,6 +21,20 @@ test('a partition query aliases the reserved project name', () => {
 test('rules load global first, then the client', () => {
   expect(rulePartitions('acme')).toEqual(['global', 'acme']);
   expect(rulePartitions('global')).toEqual(['global']);
+});
+
+test('a failed partition fails the load', async () => {
+  await expect(
+    loadPartitions({
+      projects: ['global', 'acme'],
+      loadOne: async (project) => {
+        if (project === 'global') {
+          throw new Error('query failed');
+        }
+        return ['kept'];
+      },
+    }),
+  ).rejects.toThrow('query failed');
 });
 
 test('repos load the requested client only', () => {

@@ -7,7 +7,7 @@ export type WorkOrderRepo = {
 };
 
 export const RULE_PRECEDENCE =
-  'Global rules always apply. A client rule may add but cannot drop a global rule.';
+  'Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints.';
 
 export type WorkOrder = {
   intent: string;

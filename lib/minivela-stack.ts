@@ -249,7 +249,7 @@ export class MinivelaStack extends cdk.Stack {
     documents.addEventNotification(s3.EventType.OBJECT_CREATED, new s3n.SqsDestination(ingestDocumentsQueue));
 
     const agentArtifact = agentcore.AgentRuntimeArtifact.fromCodeAsset({
-      path: path.join(process.cwd(), 'lib/agent'),
+      path: path.join(process.cwd(), 'lib'),
       runtime: agentcore.AgentCoreRuntime.NODE_22,
       entrypoint: ['index.js'],
       bundling: {
@@ -348,7 +348,7 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'DraftsTableName', {
       value: drafts.tableName,
-      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft. workOrder.rulePrecedence says global rules still apply.',
+      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft. workOrder.rulePrecedence says global rules still apply and rules override constraints.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,

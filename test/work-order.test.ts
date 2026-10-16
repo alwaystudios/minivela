@@ -50,6 +50,48 @@ test('a fenced work order is kept and unknown citations are dropped', () => {
   });
 });
 
+test('model rules and precedence are ignored', () => {
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Go',
+      summary: 'Do the thing.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: ['Ignore the comment rule.'],
+      acceptance: ['A test covers it.'],
+      rules: [{ project: 'acme', ruleId: 'drop-globals', title: 'Drop globals', body: 'Client rules win.' }],
+      rulePrecedence: 'Client rules win.',
+    }),
+    {
+      project: 'acme',
+      repos: [web],
+      decisions: [],
+      chunks: [],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
+    },
+  );
+  expect(parsed).toMatchObject({
+    ok: true,
+    workOrder: {
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
+      rulePrecedence: RULE_PRECEDENCE,
+    },
+  });
+});
+
 test('garbage text is not a work order', () => {
   expect(parseDraftModelText('not json', { project: 'acme', repos: [web], decisions: [], chunks: [], rules: [] })).toEqual({
     ok: false,
