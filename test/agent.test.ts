@@ -1,5 +1,6 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
 import { draftWorkOrder } from '../lib/agent/draft.js';
+import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
@@ -202,7 +203,14 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
         sourceKey: 'acme/transcripts/standup.vtt',
       },
     ]),
-    loadRules: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([
+      {
+        project: 'global',
+        ruleId: 'function-comment',
+        title: 'Comment every function',
+        body: 'Always start a function with a comment.',
+      },
+    ]),
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
     put,
@@ -219,12 +227,46 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: ['Match existing patterns in acme/web.'],
       acceptance: ['Query path covered by a test.'],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'function-comment',
+          title: 'Comment every function',
+          body: 'Always start a function with a comment.',
+        },
+      ],
+      rulePrecedence: RULE_PRECEDENCE,
       project: 'acme',
     },
     citations: { decisionIds: ['abc'], documentUris: ['s3://doc/rfc.md'] },
   });
   expect(result.status).toBe('success');
   expect(JSON.parse(result.response).draftId).toBe('draft-1');
+});
+
+test('draft-work-order does not store when rules fail to load', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const complete = jest.fn();
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await draftWorkOrder({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRules: jest.fn().mockRejectedValue(new Error('query failed')),
+      loadRepos: jest.fn().mockResolvedValue([webRepo]),
+      complete,
+      put,
+      draftId: 'draft-rules',
+      createdAt: '2026-10-15T21:00:00.000Z',
+    });
+    expect(complete).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(result).toEqual({ response: 'Rules failed to load.', status: 'success' });
+  } finally {
+    error.mockRestore();
+  }
 });
 
 test('draft-work-order does not store a repo that is not in the map', async () => {

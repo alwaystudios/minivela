@@ -95,16 +95,7 @@ export async function loadPartitions<T>(input: {
   projects: string[];
   loadOne: (project: string) => Promise<T[]>;
 }): Promise<T[]> {
-  const groups = await Promise.all(
-    input.projects.map(async (project) => {
-      try {
-        return await input.loadOne(project);
-      } catch (error) {
-        console.error(error);
-        return [];
-      }
-    }),
-  );
+  const groups = await Promise.all(input.projects.map((project) => input.loadOne(project)));
   return groups.flat();
 }
 

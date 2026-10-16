@@ -1,4 +1,4 @@
-import type { Repo } from './lookup.js';
+import type { Repo, Rule } from './lookup.js';
 
 export type WorkOrderRepo = {
   owner: string;
@@ -6,12 +6,17 @@ export type WorkOrderRepo = {
   paths?: string[];
 };
 
+export const RULE_PRECEDENCE =
+  'Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints.';
+
 export type WorkOrder = {
   intent: string;
   summary: string;
   repos: WorkOrderRepo[];
   constraints: string[];
   acceptance: string[];
+  rules: Rule[];
+  rulePrecedence: string;
   project?: string;
 };
 
@@ -39,6 +44,7 @@ export function parseDraftModelText(
     repos: Repo[];
     decisions: Array<{ decisionId: string }>;
     chunks: Array<{ uri?: string }>;
+    rules: Rule[];
   },
 ): DraftParse {
   const parsed = parseJsonObject(text);
@@ -72,6 +78,8 @@ export function parseDraftModelText(
     repos,
     constraints,
     acceptance,
+    rules: input.rules,
+    rulePrecedence: RULE_PRECEDENCE,
     project: input.project,
   };
   return { ok: true, workOrder, citations };
