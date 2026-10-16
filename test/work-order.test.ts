@@ -387,6 +387,161 @@ test('a draft keeps source links, file names, and repro steps', () => {
   expect(parsed.workOrder.acceptance).toEqual(['The export page offers CSV.']);
 });
 
+test('a draft drops an unnamed mechanism and keeps one the source named', () => {
+  const invented = draftOf({
+    summary: 'Update the libraries in the export page in the container images or package manifests for the export service.',
+    prompt: ['Update the libraries for the export service.', 'Open the export page.'].join('\n'),
+    constraints: [
+      'Scope is limited to the export libraries (and any other vulnerable libraries discovered in the same images); do not make unrelated changes.',
+    ],
+    rules: [smallDiffs],
+  });
+  expect(invented.summary).toContain('in the export page');
+  expect(invented.summary).toContain('for the export service');
+  expect(invented.summary).not.toContain('container');
+  expect(invented.summary).not.toContain('package');
+  expect(invented.summary).not.toContain('manifest');
+  expect(invented.constraints).toEqual(['Scope is limited to the export libraries (and any other vulnerable libraries)']);
+
+  const named = draftOf({
+    summary: 'Update the libraries in the package manifests.',
+    prompt: 'Update the libraries in the package manifests.',
+  });
+  expect(named.summary).toContain('in the package manifests');
+});
+
+test('an invented mechanism drops wherever it sits, and a source word does not save it', () => {
+  const before = draftOf({
+    summary: 'Update the libraries in the container images before the next release.',
+    prompt: 'Update the libraries before the next release.',
+  });
+  expect(before.summary).toBe('Update the libraries before the next release.');
+
+  const services = draftOf({
+    summary: 'Update the libraries in the container images for all three services.',
+    prompt: 'Update the libraries for the services.',
+  });
+  expect(services.summary).toBe('Update the libraries for all three services.');
+
+  const leading = draftOf({
+    summary: 'In the container images, update the libraries.',
+    prompt: 'Update the libraries.',
+  });
+  expect(leading.summary).toBe('update the libraries.');
+
+  const bare = draftOf({
+    summary: 'Update the container images or package manifests.',
+    prompt: 'Update the libraries.',
+  });
+  expect(bare.summary).toBe('Update.');
+
+  const mixed = draftOf({
+    summary: 'Update the libraries in the export page or the package manifests.',
+    prompt: 'Update the libraries. Open the export page.',
+  });
+  expect(mixed.summary).toBe('Update the libraries in the export page.');
+
+  const decided = draftOf({
+    summary: 'Update the libraries in the container images.',
+    prompt: 'Update the libraries.',
+    decisions: [{ decisionId: 'poster', content: 'The poster image is fine.', quote: 'Leave the poster.' }],
+  });
+  expect(decided.summary).toBe('Update the libraries.');
+
+  const single = draftOf({
+    summary: 'Update the libraries and the dependency.',
+    prompt: 'Update the libraries.',
+  });
+  expect(single.summary).toContain('dependency');
+});
+
+test('a short rule paraphrase drops and a job line stays', () => {
+  const drafted = draftOf({
+    summary: 'Update the libraries.',
+    prompt: 'Update the libraries on the export path.',
+    constraints: [
+      'Scope is limited to the export path; do not make unrelated changes.',
+      'Keep the code clear.',
+      'Ship the code change.',
+    ],
+    rules: [smallDiffs, clearNames],
+  });
+  expect(drafted.constraints).toEqual([
+    'Scope is limited to the export path',
+    'Keep the code clear.',
+    'Ship the code change.',
+  ]);
+});
+
+test('a draft stores a link once and skips the ticket address', () => {
+  const encoded = 'https://example.com/findings?filters=%7B%22status%22%3A%22open%22%7D';
+  const decoded = 'https://example.com/findings?filters={"status":"open"}';
+  const drafted = draftOf({
+    summary: `Update the libraries. Findings: ${decoded}`,
+    prompt: [
+      '# ACME-12: Update the libraries',
+      '',
+      '- **URL:** https://example.com/browse/ACME-12',
+      '',
+      `See [${decoded}](${encoded}).`,
+      'Also https://example.com/browse/acme-12',
+      'Related: https://example.com/browse/ACME-99',
+      'File: https://example.com/files/ACME-12',
+    ].join('\n'),
+  });
+  expect(drafted.summary).toContain(decoded);
+  expect(drafted.summary).not.toContain(encoded);
+  expect(drafted.summary).not.toContain('https://example.com/browse/ACME-12');
+  expect(drafted.summary).not.toContain('https://example.com/browse/acme-12');
+  expect(drafted.summary).toContain('https://example.com/browse/ACME-99');
+  expect(drafted.summary).toContain('https://example.com/files/ACME-12');
+});
+
+const smallDiffs = {
+  project: 'global',
+  ruleId: 'small-diffs',
+  title: 'Small diffs. No drive-by refactors.',
+  body: 'Prefer small, reviewable diffs. Do not refactor unrelated code in the same change.',
+};
+
+const clearNames = {
+  project: 'global',
+  ruleId: 'clear-names',
+  title: 'Prefer clear names and small functions over cleverness.',
+  body: 'Prefer human-readable code: clear names, small functions, obvious control flow.',
+};
+
+function draftOf(input: {
+  summary: string;
+  prompt: string;
+  constraints?: string[];
+  rules?: Array<{ project: string; ruleId: string; title: string; body: string }>;
+  decisions?: Array<{ decisionId: string; content?: string; quote?: string }>;
+}) {
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Update the libraries',
+      summary: input.summary,
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: input.constraints ?? ['Only change the export path.'],
+      acceptance: ['The export page offers CSV.'],
+    }),
+    {
+      project: 'acme',
+      prompt: input.prompt,
+      repos: [web],
+      decisions: input.decisions ?? [],
+      chunks: [],
+      rules: input.rules ?? [],
+    },
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    throw new Error(parsed.response);
+  }
+  return parsed.workOrder;
+}
+
 test('garbage text is not a work order', () => {
   expect(parseDraftModelText('not json', { project: 'acme', repos: [web], decisions: [], chunks: [], rules: [] })).toEqual({
     ok: false,

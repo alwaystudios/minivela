@@ -124,7 +124,8 @@ export function parseDraftModelText(
       rulePrecedence: RULE_PRECEDENCE,
       project: input.project,
     },
-    sourceMaterial(input),
+    groundingSource(input, repos),
+    input.prompt ?? '',
   );
   return { ok: true, workOrder, citations };
 }
@@ -241,19 +242,206 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
-function retainDraftFacts(workOrder: WorkOrder, source: string): WorkOrder {
+function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: string): WorkOrder {
   const readable = withoutRestatedRules(workOrder);
+  const sourceWords = new Set(words(source));
+  const summaryText = withoutUngroundedPhrases(readable.summary || workOrder.summary, sourceWords);
+  const constraints = readable.constraints.flatMap((line) => {
+    const next = withoutUngroundedPhrases(line, sourceWords);
+    return next ? [next] : [];
+  });
+  const acceptance = readable.acceptance.flatMap((line) => {
+    const next = withoutUngroundedPhrases(line, sourceWords);
+    return next ? [next] : [];
+  });
   const summary = appendMissingAnchors(
-    readable.summary || workOrder.summary,
-    source,
-    [workOrder.intent, readable.summary, ...readable.constraints, ...readable.acceptance].join('\n'),
+    summaryText,
+    anchorsFrom,
+    [workOrder.intent, summaryText, ...constraints, ...acceptance].join('\n'),
   );
   return {
     ...workOrder,
     summary,
-    constraints: readable.constraints,
-    acceptance: readable.acceptance,
+    constraints,
+    acceptance,
   };
+}
+
+const PREP = new Set(['in', 'via', 'using', 'through']);
+const FILE_EXT = /\.(?:png|jpe?g|webp|gif|pdf)$/i;
+
+function withoutUngroundedPhrases(text: string, sourceWords: Set<string>): string {
+  const tokens = text.match(/\s+|[^\s]+/g) ?? [];
+  const drop = tokens.map(() => false);
+  for (let i = 0; i < tokens.length; i++) {
+    if (isSkippable(tokens[i])) {
+      continue;
+    }
+    if (PREP.has(coreOf(tokens[i]).toLowerCase())) {
+      markPrep(tokens, drop, sourceWords, i);
+    }
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    if (!drop[i] && !isSkippable(tokens[i]) && coreOf(tokens[i]).toLowerCase() === 'or') {
+      markAlternative(tokens, drop, sourceWords, i);
+    }
+  }
+  return tidyPhrase(tokens.map((token, index) => (drop[index] ? keptPunct(token) : token)).join(''));
+}
+
+function markPrep(tokens: string[], drop: boolean[], sourceWords: Set<string>, start: number): void {
+  let content = 0;
+  let sawSame = false;
+  let last = start;
+  for (let i = start + 1; i < tokens.length; i++) {
+    if (/^\s+$/.test(tokens[i]) || isAtomic(tokens[i])) {
+      if (isAtomic(tokens[i])) {
+        break;
+      }
+      continue;
+    }
+    if (coreOf(tokens[i]).length === 0) {
+      break;
+    }
+    const core = coreOf(tokens[i]).toLowerCase();
+    if ((core === 'for' || core === 'to') && content > 0) {
+      break;
+    }
+    if (core === 'same') {
+      sawSame = true;
+    }
+    const contentWords = words(core);
+    if (contentWords.length === 0) {
+      continue;
+    }
+    if (contentWords.some((word) => sourceWords.has(word))) {
+      break;
+    }
+    content += contentWords.length;
+    last = i;
+  }
+  if (content < 2 && !(content === 1 && sawSame)) {
+    return;
+  }
+  for (let i = start; i <= last; i++) {
+    drop[i] = true;
+  }
+  if (sawSame) {
+    const previous = previousContent(tokens, start);
+    if (previous !== undefined && ungroundedContent(tokens[previous], sourceWords)) {
+      drop[previous] = true;
+    }
+  }
+}
+
+function markAlternative(tokens: string[], drop: boolean[], sourceWords: Set<string>, orAt: number): void {
+  const left = ungroundedSide(tokens, orAt, -1, sourceWords);
+  const right = ungroundedSide(tokens, orAt, 1, sourceWords);
+  if (!left && !right) {
+    return;
+  }
+  for (const side of [left, right]) {
+    if (!side) {
+      continue;
+    }
+    for (let i = side.from; i <= side.to; i++) {
+      drop[i] = true;
+    }
+  }
+  drop[orAt] = true;
+}
+
+function ungroundedSide(
+  tokens: string[],
+  orAt: number,
+  direction: -1 | 1,
+  sourceWords: Set<string>,
+): { from: number; to: number } | undefined {
+  let content = 0;
+  let from = orAt;
+  let to = orAt;
+  for (let i = orAt + direction; i >= 0 && i < tokens.length; i += direction) {
+    if (/^\s+$/.test(tokens[i])) {
+      continue;
+    }
+    if (isAtomic(tokens[i]) || coreOf(tokens[i]).length === 0) {
+      break;
+    }
+    const core = coreOf(tokens[i]).toLowerCase();
+    if (core === 'or' || PREP.has(core) || core === 'for' || core === 'to') {
+      break;
+    }
+    const contentWords = words(core);
+    if (contentWords.length === 0) {
+      if (direction < 0) {
+        from = i;
+      } else {
+        to = i;
+      }
+      continue;
+    }
+    if (contentWords.some((word) => sourceWords.has(word))) {
+      break;
+    }
+    content += contentWords.length;
+    if (direction < 0) {
+      from = i;
+    } else {
+      to = i;
+    }
+  }
+  if (content < 2) {
+    return undefined;
+  }
+  return direction < 0 ? { from, to: orAt - 1 } : { from: orAt + 1, to };
+}
+
+function coreOf(token: string): string {
+  return token.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+}
+
+function isAtomic(token: string): boolean {
+  return /:\/\//.test(token) || FILE_EXT.test(token);
+}
+
+function tidyPhrase(text: string): string {
+  return text
+    .replace(/\(\s*\)/g, '')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(/\s+([,.;!?])/g, '$1')
+    .replace(/^[ \t]*[,;]\s*/, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function previousContent(tokens: string[], start: number): number | undefined {
+  for (let i = start - 1; i >= 0; i--) {
+    if (/^\s+$/.test(tokens[i])) {
+      continue;
+    }
+    if (isAtomic(tokens[i]) || coreOf(tokens[i]).length === 0) {
+      return undefined;
+    }
+    if (words(coreOf(tokens[i])).length === 0) {
+      continue;
+    }
+    return i;
+  }
+  return undefined;
+}
+
+function ungroundedContent(token: string, sourceWords: Set<string>): boolean {
+  const contentWords = words(coreOf(token));
+  return contentWords.length > 0 && contentWords.every((word) => !sourceWords.has(word));
+}
+
+function isSkippable(token: string): boolean {
+  return /^\s+$/.test(token) || isAtomic(token);
+}
+
+function keptPunct(token: string): string {
+  return token.match(/[)\]\.!?][^A-Za-z0-9]*$/)?.[0] ?? '';
 }
 
 function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constraints: string[]; acceptance: string[] } {
@@ -306,13 +494,16 @@ function sentences(text: string): string[] {
 
 function appendMissingAnchors(summary: string, source: string, haystack: string): string {
   let seen = haystack;
+  const present = urlKeys(haystack);
   const missing: string[] = [];
   for (const anchor of sourceAnchors(source)) {
-    if (seen.includes(anchor)) {
+    const canonical = canonicalUrl(anchor);
+    if (seen.includes(anchor) || seen.includes(canonical) || present.has(canonical)) {
       continue;
     }
     missing.push(anchor);
     seen = `${seen}\n${anchor}`;
+    present.add(canonical);
   }
   if (missing.length === 0) {
     return summary.trim();
@@ -360,11 +551,16 @@ function sourceAnchors(text: string): string[] {
   );
 }
 
-const FILE_EXT = /\.(?:png|jpe?g|webp|gif|pdf)$/i;
-
 function addUrls(text: string, add: (value: string) => void): void {
+  const own = ownAddress(text);
+  const accept = (value: string) => {
+    if (own && sameAddress(value, own)) {
+      return;
+    }
+    add(value);
+  };
   for (const match of text.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) {
-    add(match[1]);
+    accept(match[1]);
   }
   for (const line of text.split(/\r?\n/)) {
     const closer = line.indexOf('](');
@@ -373,9 +569,40 @@ function addUrls(text: string, add: (value: string) => void): void {
       if (closer !== -1 && index < closer && line.lastIndexOf('[', index) !== -1) {
         continue;
       }
-      add(match[0].replace(/[.,;:]+$/, ''));
+      accept(match[0].replace(/[.,;:]+$/, ''));
     }
   }
+}
+
+function ownAddress(text: string): string | undefined {
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(/\bURL:\**\s*(https?:\/\/\S+)/i);
+    if (match) {
+      return match[1].replace(/[.,;:]+$/, '');
+    }
+  }
+  return undefined;
+}
+
+function sameAddress(left: string, right: string): boolean {
+  const normalize = (url: string) => canonicalUrl(url).replace(/\/+$/, '').toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+function canonicalUrl(url: string): string {
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
+}
+
+function urlKeys(text: string): Set<string> {
+  const keys = new Set<string>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>)\]]+/g)) {
+    keys.add(canonicalUrl(match[0].replace(/[.,;:]+$/, '')));
+  }
+  return keys;
 }
 
 function stepLines(text: string): string[] {
@@ -406,8 +633,10 @@ function stepLines(text: string): string[] {
   return steps;
 }
 
-function sourceMaterial(input: { prompt?: string }): string {
-  return input.prompt ?? '';
+function groundingSource(input: { prompt?: string; project: string }, repos: WorkOrderRepo[]): string {
+  return [input.prompt ?? '', input.project, ...repos.flatMap((repo) => [repo.owner, repo.repo, ...(repo.paths ?? [])])].join(
+    '\n',
+  );
 }
 
 function restatesRule(constraint: string, rules: Rule[]): boolean {
@@ -417,11 +646,14 @@ function restatesRule(constraint: string, rules: Rule[]): boolean {
   }
   return rules.some((rule) => {
     const ruleWords = new Set(words(`${rule.title} ${rule.body}`));
-    const shared = [...constraintWords].filter((word) => ruleWords.has(word)).length;
-    if (constraintWords.size >= 4 && shared / constraintWords.size >= 0.6) {
+    const sharedWords = [...constraintWords].filter((word) => ruleWords.has(word));
+    if (constraintWords.size >= 4 && sharedWords.length / constraintWords.size >= 0.6) {
       return true;
     }
-    if (constraintWords.size < 4 && shared === constraintWords.size) {
+    if (constraintWords.size < 4 && sharedWords.length === constraintWords.size) {
+      return true;
+    }
+    if (constraintWords.size === 3 && sharedWords.length >= 2 && sharedWords.some((word) => word.length >= 8)) {
       return true;
     }
     const titleWords = words(rule.title);
