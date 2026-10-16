@@ -1,4 +1,4 @@
-import { parseDraftModelText } from '../lib/work-order.js';
+import { parseDraftModelText, RULE_PRECEDENCE } from '../lib/work-order.js';
 
 const web = {
   project: 'acme',
@@ -43,6 +43,7 @@ test('a fenced work order is kept and unknown citations are dropped', () => {
           body: 'Always start a function with a comment.',
         },
       ],
+      rulePrecedence: RULE_PRECEDENCE,
       project: 'acme',
     },
     citations: { decisionIds: ['kept'], documentUris: ['s3://doc/rfc.md'] },

@@ -6,6 +6,9 @@ export type WorkOrderRepo = {
   paths?: string[];
 };
 
+export const RULE_PRECEDENCE =
+  'Global rules always apply. A client rule may add but cannot drop a global rule.';
+
 export type WorkOrder = {
   intent: string;
   summary: string;
@@ -13,6 +16,7 @@ export type WorkOrder = {
   constraints: string[];
   acceptance: string[];
   rules: Rule[];
+  rulePrecedence: string;
   project?: string;
 };
 
@@ -75,6 +79,7 @@ export function parseDraftModelText(
     constraints,
     acceptance,
     rules: input.rules,
+    rulePrecedence: RULE_PRECEDENCE,
     project: input.project,
   };
   return { ok: true, workOrder, citations };

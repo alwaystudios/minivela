@@ -1,5 +1,6 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
 import { draftWorkOrder } from '../lib/agent/draft.js';
+import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
@@ -234,6 +235,7 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
           body: 'Always start a function with a comment.',
         },
       ],
+      rulePrecedence: RULE_PRECEDENCE,
       project: 'acme',
     },
     citations: { decisionIds: ['abc'], documentUris: ['s3://doc/rfc.md'] },
