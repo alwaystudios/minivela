@@ -409,7 +409,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
       read: readDocumentsObject,
     });
     if ('status' in loaded) {
-      json(res, 400, loaded);
+      json(res, 200, loaded);
       return;
     }
     ticketDocument = loaded.chunk;
