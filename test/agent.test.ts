@@ -44,6 +44,33 @@ test('draft-work-order is accepted as a skill', () => {
   });
 });
 
+test('markdown format is accepted on draft-work-order', () => {
+  expect(
+    parseInvokePayload({
+      prompt: 'add CSV export',
+      project: 'acme',
+      skill: 'draft-work-order',
+      format: 'markdown',
+    }),
+  ).toEqual({
+    prompt: 'add CSV export',
+    project: 'acme',
+    skill: 'draft-work-order',
+    format: 'markdown',
+  });
+});
+
+test('format is rejected unless the skill is draft-work-order', () => {
+  expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', format: 'markdown' })).toEqual({
+    response: 'format is only valid with skill draft-work-order.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft-work-order', format: 'yaml' })).toEqual({
+    response: 'format must be json or markdown when set.',
+    status: 'error',
+  });
+});
+
 test('an unknown skill is rejected', () => {
   expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft' })).toEqual({
     response: 'skill must be check-readiness or draft-work-order when set.',
@@ -242,6 +269,42 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
   });
   expect(result.status).toBe('success');
   expect(JSON.parse(result.response).draftId).toBe('draft-1');
+});
+
+test('draft-work-order can return the stored draft as markdown', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([
+      {
+        project: 'global',
+        ruleId: 'function-comment',
+        title: 'Comment every function',
+        body: 'Always start a function with a comment.',
+      },
+    ]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: jest.fn().mockResolvedValue(validDraftJson),
+    put,
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+    format: 'markdown',
+  });
+  expect(put).toHaveBeenCalledWith(
+    expect.objectContaining({
+      project: 'acme',
+      draftId: 'draft-1',
+      workOrder: expect.objectContaining({ intent: 'Add CSV export', rulePrecedence: RULE_PRECEDENCE }),
+    }),
+  );
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('## Intent');
+  expect(result.response).toContain('Add CSV export');
+  expect(result.response).toContain(RULE_PRECEDENCE);
+  expect(result.response).not.toContain('"draftId"');
 });
 
 test('draft-work-order does not store when rules fail to load', async () => {

@@ -28,7 +28,7 @@ The documents bucket is the knowledge base data source. Put markdown there, with
 
 Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `prompt` and `project` on every invoke. The agent retrieves that client plus `global`, and searches transcript decisions the same way. Close decisions overrule documents. A documents question still works if search finds nothing. It will not search without a project.
 
-Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. Both paths load global rules and that client's repo map. Omit `skill` for a normal question. The draft names repos from that map only.
+Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. Both paths load global rules and that client's repo map. Omit `skill` for a normal question. The draft names repos from that map only. The stored row is JSON, and that JSON is the response. Set `format` to `markdown` on `draft-work-order` to get the same draft back as an agent prompt.
 
 Prove decision search with a `.vtt` at `<project>/transcripts/<meeting>.vtt`, then ask about that meeting. `test/fixtures/csv-export.vtt` is one such file.
 
@@ -62,6 +62,18 @@ aws bedrock-agentcore invoke-agent-runtime \
   --agent-runtime-arn <agent-runtime-arn> \
   --runtime-session-id "$SESSION" \
   --payload '{"prompt":"add CSV export","project":"acme","skill":"draft-work-order"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  outfile.json
+```
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <agent-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"prompt":"add CSV export","project":"acme","skill":"draft-work-order","format":"markdown"}' \
   --qualifier DEFAULT \
   --profile my-profile \
   --region us-east-1 \

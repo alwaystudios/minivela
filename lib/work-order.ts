@@ -33,6 +33,49 @@ export type DraftWrite = {
   createdAt: string;
 };
 
+export type DraftResponseFormat = 'json' | 'markdown';
+
+export function formatDraftMarkdown(item: DraftWrite): string {
+  const { workOrder } = item;
+  const lines = [
+    `Project: ${item.project}`,
+    `Draft: ${item.draftId}`,
+    `Created: ${item.createdAt}`,
+    '',
+    '## Intent',
+    '',
+    workOrder.intent,
+    '',
+    '## Summary',
+    '',
+    workOrder.summary,
+    '',
+    '## Repos',
+    '',
+    ...workOrder.repos.map(repoLine),
+    '',
+    '## Constraints',
+    '',
+    ...workOrder.constraints.map((line) => `- ${line}`),
+    '',
+    '## Acceptance',
+    '',
+    ...workOrder.acceptance.map((line) => `- ${line}`),
+    '',
+    '## Rules',
+    '',
+    workOrder.rulePrecedence,
+  ];
+  if (workOrder.rules.length > 0) {
+    lines.push('', ...ruleBlocks(workOrder.rules));
+  }
+  const citations = citationLines(item.citations);
+  if (citations.length > 0) {
+    lines.push('', '## Citations', '', ...citations);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 export type DraftParse =
   | { ok: true; workOrder: WorkOrder; citations: DraftCitations }
   | { ok: false; response: string };
@@ -83,6 +126,25 @@ export function parseDraftModelText(
     project: input.project,
   };
   return { ok: true, workOrder, citations };
+}
+
+function repoLine(repo: WorkOrderRepo): string {
+  const label = `${repo.owner}/${repo.repo}`;
+  return repo.paths && repo.paths.length > 0 ? `- ${label} (${repo.paths.join(', ')})` : `- ${label}`;
+}
+
+function ruleBlocks(rules: Rule[]): string[] {
+  return rules.flatMap((rule, index) => {
+    const block = [`### ${rule.title}`, '', `\`${rule.project}\` / \`${rule.ruleId}\``, '', rule.body];
+    return index === 0 ? block : ['', ...block];
+  });
+}
+
+function citationLines(citations: DraftCitations): string[] {
+  return [
+    ...citations.decisionIds.map((id) => `- decision ${id}`),
+    ...citations.documentUris.map((uri) => `- ${uri}`),
+  ];
 }
 
 function parseJsonObject(text: string): unknown {

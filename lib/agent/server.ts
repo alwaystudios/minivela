@@ -352,6 +352,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             put: putDraft,
             draftId: randomUUID(),
             createdAt: new Date().toISOString(),
+            format: parsedPayload.format,
           })
         : await answerFromMemory({
             prompt: parsedPayload.prompt,

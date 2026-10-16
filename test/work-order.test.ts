@@ -1,4 +1,4 @@
-import { parseDraftModelText, RULE_PRECEDENCE } from '../lib/work-order.js';
+import { formatDraftMarkdown, parseDraftModelText, RULE_PRECEDENCE } from '../lib/work-order.js';
 
 const web = {
   project: 'acme',
@@ -90,6 +90,109 @@ test('model rules and precedence are ignored', () => {
       rulePrecedence: RULE_PRECEDENCE,
     },
   });
+});
+
+test('a draft renders as an agent prompt', () => {
+  expect(
+    formatDraftMarkdown({
+      project: 'acme',
+      draftId: 'draft-1',
+      createdAt: '2026-10-15T21:00:00.000Z',
+      workOrder: {
+        intent: 'Add CSV export',
+        summary: 'Add CSV export in acme/web.',
+        repos: [
+          { owner: 'acme', repo: 'web', paths: ['src/export'] },
+          { owner: 'acme', repo: 'api' },
+        ],
+        constraints: ['Match existing patterns in acme/web.'],
+        acceptance: ['Query path covered by a test.'],
+        rules: [
+          {
+            project: 'global',
+            ruleId: 'function-comment',
+            title: 'Comment every function',
+            body: 'Always start a function with a comment.',
+          },
+          {
+            project: 'acme',
+            ruleId: 'csv-only',
+            title: 'CSV only',
+            body: 'Do not add Excel.',
+          },
+        ],
+        rulePrecedence: RULE_PRECEDENCE,
+        project: 'acme',
+      },
+      citations: { decisionIds: ['abc'], documentUris: ['s3://doc/rfc.md'] },
+    }),
+  ).toBe(`Project: acme
+Draft: draft-1
+Created: 2026-10-15T21:00:00.000Z
+
+## Intent
+
+Add CSV export
+
+## Summary
+
+Add CSV export in acme/web.
+
+## Repos
+
+- acme/web (src/export)
+- acme/api
+
+## Constraints
+
+- Match existing patterns in acme/web.
+
+## Acceptance
+
+- Query path covered by a test.
+
+## Rules
+
+${RULE_PRECEDENCE}
+
+### Comment every function
+
+\`global\` / \`function-comment\`
+
+Always start a function with a comment.
+
+### CSV only
+
+\`acme\` / \`csv-only\`
+
+Do not add Excel.
+
+## Citations
+
+- decision abc
+- s3://doc/rfc.md
+`);
+});
+
+test('a draft with no citations omits that section', () => {
+  const markdown = formatDraftMarkdown({
+    project: 'acme',
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+    workOrder: {
+      intent: 'Add CSV export',
+      summary: 'Add CSV export in acme/web.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: ['Match existing patterns in acme/web.'],
+      acceptance: ['Query path covered by a test.'],
+      rules: [],
+      rulePrecedence: RULE_PRECEDENCE,
+    },
+    citations: { decisionIds: [], documentUris: [] },
+  });
+  expect(markdown).toContain(RULE_PRECEDENCE);
+  expect(markdown).not.toContain('## Citations');
+  expect(markdown).not.toContain('### ');
 });
 
 test('garbage text is not a work order', () => {

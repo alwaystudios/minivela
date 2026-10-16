@@ -1,6 +1,12 @@
 import type { RetrievedDecision } from '../search-decisions.js';
 import type { Repo, Rule } from '../lookup.js';
-import { parseDraftModelText, RULE_PRECEDENCE, type DraftWrite } from '../work-order.js';
+import {
+  formatDraftMarkdown,
+  parseDraftModelText,
+  RULE_PRECEDENCE,
+  type DraftResponseFormat,
+  type DraftWrite,
+} from '../work-order.js';
 import type { AnswerResult, RetrievedChunk } from './answer.js';
 
 export async function draftWorkOrder(input: {
@@ -21,6 +27,7 @@ export async function draftWorkOrder(input: {
   put: (item: DraftWrite) => Promise<void>;
   draftId: string;
   createdAt: string;
+  format?: DraftResponseFormat;
 }): Promise<AnswerResult> {
   const chunksPromise = input.retrieve({ prompt: input.prompt, project: input.project });
   const decisionsPromise = input.searchDecisions({ prompt: input.prompt, project: input.project }).catch((error) => {
@@ -70,7 +77,8 @@ export async function draftWorkOrder(input: {
     createdAt: input.createdAt,
   };
   await input.put(item);
-  return { response: JSON.stringify(item, null, 2), status: 'success' };
+  const response = input.format === 'markdown' ? formatDraftMarkdown(item) : JSON.stringify(item, null, 2);
+  return { response, status: 'success' };
 }
 
 export const DRAFT_SYSTEM_PROMPT =
