@@ -228,18 +228,10 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
-const MECHANISM_PHRASES = ['dockerfile', 'dockerfiles', 'base image', 'base images', 'image layer', 'image layers'];
-
 function retainDraftFacts(workOrder: WorkOrder, source: string): WorkOrder {
-  const stripped: WorkOrder = {
-    ...workOrder,
-    summary: proseWithoutMechanism(workOrder.summary, source),
-    constraints: workOrder.constraints.filter((line) => !inventedMechanism(line, source)),
-    acceptance: workOrder.acceptance.filter((line) => !inventedMechanism(line, source)),
-  };
-  const readable = withoutRestatedRules(stripped);
+  const readable = withoutRestatedRules(workOrder);
   const summary = appendMissingAnchors(
-    readable.summary || stripped.summary || workOrder.summary,
+    readable.summary || workOrder.summary,
     source,
     [workOrder.intent, readable.summary, ...readable.constraints, ...readable.acceptance].join('\n'),
   );
@@ -263,18 +255,6 @@ function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constrai
       return kept ? [kept] : [];
     }),
   };
-}
-
-function proseWithoutMechanism(text: string, source: string): string {
-  const parts = sentences(text);
-  const kept = parts.filter((part) => !inventedMechanism(part, source));
-  if (kept.length === 0) {
-    return '';
-  }
-  if (kept.length === parts.length) {
-    return text.trim();
-  }
-  return kept.join(' ');
 }
 
 function proseWithoutRules(text: string, rules: Rule[]): string {
@@ -309,12 +289,6 @@ function sentences(text: string): string[] {
     .split(/(?<=[.!?])\s+(?=[A-Z])/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
-}
-
-function inventedMechanism(line: string, source: string): boolean {
-  const lineLower = line.toLowerCase();
-  const sourceLower = source.toLowerCase();
-  return MECHANISM_PHRASES.some((phrase) => lineLower.includes(phrase) && !sourceLower.includes(phrase));
 }
 
 function appendMissingAnchors(summary: string, source: string, haystack: string): string {

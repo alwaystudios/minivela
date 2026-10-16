@@ -315,7 +315,7 @@ test('a draft with no citations omits that section', () => {
   expect(markdown).not.toContain('### ');
 });
 
-test('a draft keeps source links, file names, and repro steps, and drops an invented mechanism', () => {
+test('a draft keeps source links, file names, and repro steps', () => {
   const source = [
     'Update the libraries.',
     '',
@@ -329,7 +329,7 @@ test('a draft keeps source links, file names, and repro steps, and drops an inve
   const parsed = parseDraftModelText(
     JSON.stringify({
       intent: 'Add CSV export',
-      summary: 'Update the libraries in acme/web. Update the base images in the Dockerfile.',
+      summary: 'Update the libraries in acme/web.',
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: [
         'Only change the export path.',
@@ -358,8 +358,6 @@ test('a draft keeps source links, file names, and repro steps, and drops an inve
     return;
   }
   expect(parsed.workOrder.summary).toContain('Update the libraries in acme/web.');
-  expect(parsed.workOrder.summary).not.toContain('Dockerfile');
-  expect(parsed.workOrder.summary).not.toContain('base image');
   expect(parsed.workOrder.summary).toContain('https://example.com/designs/export');
   expect(parsed.workOrder.summary).toContain('Shot 2026-10-01 at 15.18.04.png');
   expect(parsed.workOrder.summary).toContain('shot_2026-10-01.png');
