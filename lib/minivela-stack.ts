@@ -281,6 +281,7 @@ export class MinivelaStack extends cdk.Stack {
         RULES_TABLE_NAME: rules.tableName,
         REPOS_TABLE_NAME: repos.tableName,
         DRAFTS_TABLE_NAME: drafts.tableName,
+        DOCUMENTS_BUCKET_NAME: documents.bucketName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
     });
@@ -288,6 +289,18 @@ export class MinivelaStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ['bedrock:Retrieve'],
         resources: [knowledgeBase.attrKnowledgeBaseArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:ListBucket'],
+        resources: [documents.bucketArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject'],
+        resources: [documents.arnForObjects('*')],
       }),
     );
     agent.role.addToPrincipalPolicy(

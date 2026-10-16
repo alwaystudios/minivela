@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, GetItemCommand, QueryCommand, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
+import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { embedText } from '../embed.js';
 import {
@@ -25,12 +26,14 @@ import {
   type ScoredDecision,
 } from '../search-decisions.js';
 import type { DraftWrite } from '../work-order.js';
+import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
 import { draftWorkOrder, DRAFT_SYSTEM_PROMPT, readWorkOrder } from './draft.js';
 import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
 
 const retrieveClient = new BedrockAgentRuntimeClient({});
 const bedrock = new BedrockRuntimeClient({});
+const s3 = new S3Client({});
 const dynamodb = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(dynamodb);
 
@@ -48,6 +51,31 @@ async function readBody(req: IncomingMessage): Promise<string> {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readDocumentsObject(key: string): Promise<string | undefined> {
+  try {
+    const result = await s3.send(
+      new GetObjectCommand({
+        Bucket: requiredEnv('DOCUMENTS_BUCKET_NAME'),
+        Key: key,
+      }),
+    );
+    return await result.Body?.transformToString();
+  } catch (error) {
+    if (isMissingObject(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isMissingObject(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('name' in error)) {
+    return false;
+  }
+  const name = (error as { name: unknown }).name;
+  return name === 'NoSuchKey' || name === 'NotFound';
 }
 
 async function retrieve(query: { prompt: string; project: string }): Promise<RetrievedChunk[]> {
@@ -372,11 +400,27 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     json(res, 200, result);
     return;
   }
+  let ticketDocument: RetrievedChunk | undefined;
+  if (parsedPayload.ticket) {
+    const loaded = await readTicketMarkdown({
+      bucket: requiredEnv('DOCUMENTS_BUCKET_NAME'),
+      project: parsedPayload.project,
+      ticket: parsedPayload.ticket,
+      read: readDocumentsObject,
+    });
+    if ('status' in loaded) {
+      json(res, 200, loaded);
+      return;
+    }
+    ticketDocument = loaded.chunk;
+  }
+  const prompt = promptForInvoke(parsedPayload.prompt, ticketDocument?.text);
   const result =
     parsedPayload.skill === 'check-readiness'
       ? await checkReadiness({
-          prompt: parsedPayload.prompt,
+          prompt,
           project: parsedPayload.project,
+          ticketDocument,
           retrieve,
           searchDecisions,
           loadRules,
@@ -385,8 +429,9 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
         })
       : parsedPayload.skill === 'draft-work-order'
         ? await draftWorkOrder({
-            prompt: parsedPayload.prompt,
+            prompt,
             project: parsedPayload.project,
+            ticketDocument,
             retrieve,
             searchDecisions,
             loadRules,
@@ -398,8 +443,9 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             format: parsedPayload.format,
           })
         : await answerFromMemory({
-            prompt: parsedPayload.prompt,
+            prompt,
             project: parsedPayload.project,
+            ticketDocument,
             retrieve,
             searchDecisions,
             complete,

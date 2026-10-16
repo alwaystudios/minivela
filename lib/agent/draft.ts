@@ -12,6 +12,7 @@ import type { AnswerResult, RetrievedChunk } from './answer.js';
 export async function draftWorkOrder(input: {
   prompt: string;
   project: string;
+  ticketDocument?: RetrievedChunk;
   retrieve: (query: { prompt: string; project: string }) => Promise<RetrievedChunk[]>;
   searchDecisions: (query: { prompt: string; project: string }) => Promise<RetrievedDecision[]>;
   loadRules: (project: string) => Promise<Rule[]>;
@@ -29,7 +30,9 @@ export async function draftWorkOrder(input: {
   createdAt: string;
   format?: DraftResponseFormat;
 }): Promise<AnswerResult> {
-  const chunksPromise = input.retrieve({ prompt: input.prompt, project: input.project });
+  const chunksPromise = input.ticketDocument
+    ? Promise.resolve([input.ticketDocument])
+    : input.retrieve({ prompt: input.prompt, project: input.project });
   const decisionsPromise = input.searchDecisions({ prompt: input.prompt, project: input.project }).catch((error) => {
     console.error(error);
     return [];

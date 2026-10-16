@@ -1,5 +1,6 @@
 import { projectRetrieveFilter } from '../project-filter.js';
 import type { RetrievedDecision } from '../search-decisions.js';
+import { isTicketKey } from '../ticket.js';
 import type { DraftResponseFormat } from '../work-order.js';
 
 export type { RetrievedDecision };
@@ -21,16 +22,30 @@ export type InvokeSkill = 'check-readiness' | 'draft-work-order';
 export function parseInvokePayload(
   raw: unknown,
 ):
-  | { prompt: string; project: string; skill?: InvokeSkill; format?: DraftResponseFormat }
+  | { project: string; prompt?: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
   | { project: string; draftId: string; format?: DraftResponseFormat }
   | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { response: 'Send JSON with prompt and project.', status: 'error' };
   }
-  const body = raw as { prompt?: unknown; project?: unknown; skill?: unknown; format?: unknown; draftId?: unknown };
+  const body = raw as {
+    prompt?: unknown;
+    project?: unknown;
+    skill?: unknown;
+    format?: unknown;
+    draftId?: unknown;
+    ticket?: unknown;
+  };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   const project = typeof body.project === 'string' ? body.project.trim() : '';
   const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : '';
+  if (body.ticket !== undefined && body.ticket !== '' && typeof body.ticket !== 'string') {
+    return { response: 'Name a ticket key.', status: 'error' };
+  }
+  const ticket = typeof body.ticket === 'string' ? body.ticket.trim() : '';
+  if (ticket && !isTicketKey(ticket)) {
+    return { response: 'Name a ticket key.', status: 'error' };
+  }
   if (!project) {
     return { response: 'Name a project. The agent will not search without one.', status: 'error' };
   }
@@ -39,13 +54,13 @@ export function parseInvokePayload(
     return format;
   }
   if (draftId) {
-    if (prompt || (body.skill !== undefined && body.skill !== '')) {
-      return { response: 'draftId fetches a stored draft. Omit prompt and skill.', status: 'error' };
+    if (prompt || ticket || (body.skill !== undefined && body.skill !== '')) {
+      return { response: 'draftId fetches a stored draft. Omit prompt, skill, and ticket.', status: 'error' };
     }
     return format ? { project, draftId, format } : { project, draftId };
   }
-  if (!prompt) {
-    return { response: 'Ask a question in prompt.', status: 'error' };
+  if (!prompt && !ticket) {
+    return { response: 'Ask a question in prompt, or name a ticket.', status: 'error' };
   }
   if (
     body.skill !== undefined &&
@@ -57,10 +72,31 @@ export function parseInvokePayload(
   }
   const skill = body.skill === 'check-readiness' || body.skill === 'draft-work-order' ? body.skill : undefined;
   if (format === undefined) {
-    return skill ? { prompt, project, skill } : { prompt, project };
+    if (skill && ticket && prompt) {
+      return { prompt, project, skill, ticket };
+    }
+    if (skill && ticket) {
+      return { project, skill, ticket };
+    }
+    if (skill) {
+      return { prompt, project, skill };
+    }
+    if (ticket && prompt) {
+      return { prompt, project, ticket };
+    }
+    if (ticket) {
+      return { project, ticket };
+    }
+    return { prompt, project };
   }
   if (skill !== 'draft-work-order') {
     return { response: 'format is only valid with skill draft-work-order.', status: 'error' };
+  }
+  if (ticket && prompt) {
+    return { prompt, project, skill, format, ticket };
+  }
+  if (ticket) {
+    return { project, skill, format, ticket };
   }
   return { prompt, project, skill, format };
 }
@@ -85,6 +121,7 @@ function parseFormat(value: unknown): DraftResponseFormat | undefined | AnswerRe
 export async function answerFromMemory(input: {
   prompt: string;
   project: string;
+  ticketDocument?: RetrievedChunk;
   retrieve: (query: { prompt: string; project: string }) => Promise<RetrievedChunk[]>;
   searchDecisions: (query: { prompt: string; project: string }) => Promise<RetrievedDecision[]>;
   complete: (query: {
@@ -94,7 +131,9 @@ export async function answerFromMemory(input: {
     decisions: RetrievedDecision[];
   }) => Promise<string>;
 }): Promise<AnswerResult> {
-  const chunksPromise = input.retrieve({ prompt: input.prompt, project: input.project });
+  const chunksPromise = input.ticketDocument
+    ? Promise.resolve([input.ticketDocument])
+    : input.retrieve({ prompt: input.prompt, project: input.project });
   const decisions = await input.searchDecisions({ prompt: input.prompt, project: input.project }).catch((error) => {
     console.error(error);
     return [];
