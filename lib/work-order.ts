@@ -41,7 +41,7 @@ export function formatDraftMarkdown(
   decisions: Array<Pick<RetrievedDecision, 'decisionId' | 'quote' | 'speaker' | 'loggedAt'>> = [],
 ): string {
   const { workOrder } = item;
-  const constraints = workOrder.constraints.filter((line) => !restatesRule(line, workOrder.rules));
+  const readable = withoutRestatedRules(workOrder);
   const lines = [
     `Project: ${item.project}`,
     `Draft: ${item.draftId}`,
@@ -53,20 +53,19 @@ export function formatDraftMarkdown(
     '',
     '## Summary',
     '',
-    safeBlock(workOrder.summary),
+    safeBlock(readable.summary || workOrder.summary),
     '',
     '## Repos',
     '',
     ...workOrder.repos.map(repoLine),
   ];
-  if (constraints.length > 0) {
-    lines.push('', '## Constraints', '', ...constraints.map((line) => `- ${oneLine(line)}`));
+  if (readable.constraints.length > 0) {
+    lines.push('', '## Constraints', '', ...readable.constraints.map((line) => `- ${oneLine(line)}`));
+  }
+  if (readable.acceptance.length > 0) {
+    lines.push('', '## Acceptance', '', ...readable.acceptance.map((line) => `- ${oneLine(line)}`));
   }
   lines.push(
-    '',
-    '## Acceptance',
-    '',
-    ...workOrder.acceptance.map((line) => `- ${oneLine(line)}`),
     '',
     '## Rules',
     '',
@@ -91,8 +90,9 @@ export function parseDraftModelText(
   input: {
     project: string;
     repos: Repo[];
-    decisions: Array<{ decisionId: string }>;
-    chunks: Array<{ uri?: string }>;
+    prompt?: string;
+    decisions: Array<{ decisionId: string; title?: string; content?: string; quote?: string }>;
+    chunks: Array<{ uri?: string; text?: string }>;
     rules: Rule[];
   },
 ): DraftParse {
@@ -121,16 +121,19 @@ export function parseDraftModelText(
     input.chunks.flatMap((chunk) => (chunk.uri ? [chunk.uri] : [])),
   );
   const citations = parseCitations(body.citations, knownDecisionIds, knownDocumentUris);
-  const workOrder: WorkOrder = {
-    intent,
-    summary,
-    repos,
-    constraints,
-    acceptance,
-    rules: input.rules,
-    rulePrecedence: RULE_PRECEDENCE,
-    project: input.project,
-  };
+  const workOrder = retainDraftFacts(
+    {
+      intent,
+      summary,
+      repos,
+      constraints,
+      acceptance,
+      rules: input.rules,
+      rulePrecedence: RULE_PRECEDENCE,
+      project: input.project,
+    },
+    sourceMaterial(input),
+  );
   return { ok: true, workOrder, citations };
 }
 
@@ -225,18 +228,218 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
+const MECHANISM_PHRASES = ['dockerfile', 'dockerfiles', 'base image', 'base images', 'image layer', 'image layers'];
+
+function retainDraftFacts(workOrder: WorkOrder, source: string): WorkOrder {
+  const stripped: WorkOrder = {
+    ...workOrder,
+    summary: proseWithoutMechanism(workOrder.summary, source),
+    constraints: workOrder.constraints.filter((line) => !inventedMechanism(line, source)),
+    acceptance: workOrder.acceptance.filter((line) => !inventedMechanism(line, source)),
+  };
+  const readable = withoutRestatedRules(stripped);
+  const summary = appendMissingAnchors(
+    readable.summary || stripped.summary || workOrder.summary,
+    source,
+    [workOrder.intent, readable.summary, ...readable.constraints, ...readable.acceptance].join('\n'),
+  );
+  return {
+    ...workOrder,
+    summary,
+    constraints: readable.constraints,
+    acceptance: readable.acceptance,
+  };
+}
+
+function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constraints: string[]; acceptance: string[] } {
+  return {
+    summary: proseWithoutRules(workOrder.summary, workOrder.rules),
+    constraints: workOrder.constraints.flatMap((line) => {
+      const kept = bulletWithoutRules(line, workOrder.rules);
+      return kept ? [kept] : [];
+    }),
+    acceptance: workOrder.acceptance.flatMap((line) => {
+      const kept = bulletWithoutRules(line, workOrder.rules);
+      return kept ? [kept] : [];
+    }),
+  };
+}
+
+function proseWithoutMechanism(text: string, source: string): string {
+  const parts = sentences(text);
+  const kept = parts.filter((part) => !inventedMechanism(part, source));
+  if (kept.length === 0) {
+    return '';
+  }
+  if (kept.length === parts.length) {
+    return text.trim();
+  }
+  return kept.join(' ');
+}
+
+function proseWithoutRules(text: string, rules: Rule[]): string {
+  const parts = sentences(text);
+  const kept = parts.filter((part) => !restatesRule(part, rules));
+  if (kept.length === 0 || kept.length === parts.length) {
+    return text.trim();
+  }
+  return kept.join(' ');
+}
+
+function bulletWithoutRules(line: string, rules: Rule[]): string | undefined {
+  const parts = line
+    .split(/\s*(?:—|;)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  if (parts.length < 2) {
+    return restatesRule(line, rules) ? undefined : line;
+  }
+  const kept = parts.filter((part) => !restatesRule(part, rules));
+  if (kept.length === 0 || (kept.length === parts.length && restatesRule(line, rules))) {
+    return undefined;
+  }
+  if (kept.length === parts.length) {
+    return line;
+  }
+  return kept.join('; ');
+}
+
+function sentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+(?=[A-Z])/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
+function inventedMechanism(line: string, source: string): boolean {
+  const lineLower = line.toLowerCase();
+  const sourceLower = source.toLowerCase();
+  return MECHANISM_PHRASES.some((phrase) => lineLower.includes(phrase) && !sourceLower.includes(phrase));
+}
+
+function appendMissingAnchors(summary: string, source: string, haystack: string): string {
+  let seen = haystack;
+  const missing: string[] = [];
+  for (const anchor of sourceAnchors(source)) {
+    if (seen.includes(anchor)) {
+      continue;
+    }
+    missing.push(anchor);
+    seen = `${seen}\n${anchor}`;
+  }
+  if (missing.length === 0) {
+    return summary.trim();
+  }
+  const base = summary.trim();
+  return base ? `${base}\n${missing.join('\n')}` : missing.join('\n');
+}
+
+function sourceAnchors(text: string): string[] {
+  const anchors: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    anchors.push(trimmed);
+  };
+  for (const match of text.matchAll(/\((https?:\/\/[^)\s]+)\)/g)) {
+    add(match[1]);
+  }
+  for (const match of text.matchAll(/https?:\/\/[^\s<>)\]]+/g)) {
+    add(match[0].replace(/[.,;:]+$/, ''));
+  }
+  for (const match of text.matchAll(/!\[([^\]]+)\]\(([^)\s]+)\)/g)) {
+    const alt = match[1].trim();
+    if (FILE_EXT.test(alt)) {
+      add(alt);
+    }
+    const base = match[2].split('/').pop();
+    if (base && FILE_EXT.test(base)) {
+      add(base);
+    }
+  }
+  for (const match of text.matchAll(/(?:^|[\s([/"'])([\w.-]+\.(?:png|jpe?g|webp|gif|pdf))/gi)) {
+    add(match[1]);
+  }
+  for (const step of stepLines(text)) {
+    add(step);
+  }
+  return anchors.filter(
+    (anchor) =>
+      !anchors.some(
+        (other) =>
+          other.length > anchor.length &&
+          other.endsWith(anchor) &&
+          /[\s_/-]/.test(other.charAt(other.length - anchor.length - 1)),
+      ),
+  );
+}
+
+const FILE_EXT = /\.(?:png|jpe?g|webp|gif|pdf)$/i;
+
+function stepLines(text: string): string[] {
+  const steps: string[] = [];
+  let inSteps = false;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^(?:#{1,6}\s+|\*\*)?steps\b/i.test(trimmed) && trimmed.length < 40) {
+      inSteps = true;
+      continue;
+    }
+    if (!inSteps) {
+      continue;
+    }
+    const bullet = trimmed.match(/^[-*]\s+(.*)$/);
+    if (bullet) {
+      const step = bullet[1].trim();
+      if (step.length > 0 && step.length <= 240 && steps.length < 12) {
+        steps.push(step);
+      }
+      continue;
+    }
+    if (trimmed === '') {
+      continue;
+    }
+    break;
+  }
+  return steps;
+}
+
+function sourceMaterial(input: {
+  prompt?: string;
+  chunks: Array<{ text?: string }>;
+  decisions: Array<{ title?: string; content?: string; quote?: string }>;
+}): string {
+  return [
+    input.prompt ?? '',
+    ...input.chunks.map((chunk) => chunk.text ?? ''),
+    ...input.decisions.flatMap((decision) => [decision.title ?? '', decision.content ?? '', decision.quote ?? '']),
+  ]
+    .filter((part) => part.trim().length > 0)
+    .join('\n');
+}
+
 function restatesRule(constraint: string, rules: Rule[]): boolean {
   const constraintWords = new Set(words(constraint));
-  if (constraintWords.size < 4) {
+  if (constraintWords.size < 2) {
     return false;
   }
   return rules.some((rule) => {
     const ruleWords = new Set(words(`${rule.title} ${rule.body}`));
     const shared = [...constraintWords].filter((word) => ruleWords.has(word)).length;
-    if (shared / constraintWords.size >= 0.6) {
+    if (constraintWords.size >= 4 && shared / constraintWords.size >= 0.6) {
+      return true;
+    }
+    if (constraintWords.size < 4 && shared === constraintWords.size) {
       return true;
     }
     const titleWords = words(rule.title);
+    if (titleWords.length >= 3 && titleWords.every((word) => constraintWords.has(word))) {
+      return true;
+    }
     if (titleWords.length < 5) {
       return false;
     }

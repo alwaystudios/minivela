@@ -218,16 +218,33 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
       createdAt: '2026-10-16T07:22:19.216Z',
       workOrder: {
         intent: 'Add CSV export',
-        summary: 'Add CSV export in acme/web.',
+        summary:
+          'Add CSV export in acme/web. Add or update tests for the export behaviour. Do not refactor unrelated UI.',
         repos: [{ owner: 'acme', repo: 'web' }],
         constraints: [
-          'Only change the CSV export path.',
+          'Only change the CSV export path — do not refactor unrelated UI.',
           'Do not widen any auth, tenancy, or public API surface as part of this change.',
           'No secrets, tokens, or real PII in code, fixtures, or test data.',
+          'Do not embed secrets, tokens, or real PII in build files or CI config.',
           'Keep functions and variable names clear and descriptive; avoid clever or overly terse implementations.',
         ],
-        acceptance: ['Query path covered by a test.'],
+        acceptance: [
+          'Query path covered by a test.',
+          'No unrelated code or dependencies are changed in the same diff.',
+        ],
         rules: [
+          {
+            project: 'global',
+            ruleId: 'small-diffs',
+            title: 'Small diffs. No drive-by refactors.',
+            body: 'Prefer small, reviewable diffs. Do not refactor unrelated code in the same change.',
+          },
+          {
+            project: 'global',
+            ruleId: 'test-changed-behaviour',
+            title: 'Tests for behaviour you change.',
+            body: 'Add or update tests for behaviour you change. Do not land untested paths for later.',
+          },
           {
             project: 'global',
             ruleId: 'do-not-widen-auth',
@@ -260,9 +277,16 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
       },
     ],
   );
-  expect(markdown).toContain('- Only change the CSV export path.');
+  expect(markdown).toContain('Add CSV export in acme/web.');
+  expect(markdown).not.toContain('Add or update tests for the export behaviour');
+  expect(markdown).not.toContain('Do not refactor unrelated UI');
+  expect(markdown).toContain('- Only change the CSV export path');
+  expect(markdown).not.toContain('do not refactor unrelated UI');
+  expect(markdown).toContain('- Query path covered by a test.');
   expect(markdown).not.toContain('Do not widen any auth');
   expect(markdown).not.toContain('No secrets, tokens, or real PII in code, fixtures');
+  expect(markdown).not.toContain('Do not embed secrets, tokens, or real PII');
+  expect(markdown).not.toContain('No unrelated code or dependencies');
   expect(markdown).not.toContain('Keep functions and variable names');
   expect(markdown).toContain('### Do not silently widen auth, tenancy, or public API.');
   expect(markdown).toContain('quote: Excel is out of scope.');
@@ -289,6 +313,61 @@ test('a draft with no citations omits that section', () => {
   expect(markdown).toContain(RULE_PRECEDENCE);
   expect(markdown).not.toContain('## Citations');
   expect(markdown).not.toContain('### ');
+});
+
+test('a draft keeps source links, file names, and repro steps, and drops an invented mechanism', () => {
+  const source = [
+    'Update the libraries.',
+    '',
+    '**Steps**',
+    '- Open the export page',
+    '- Choose CSV',
+    '',
+    'Design: https://example.com/designs/export',
+    '![Shot 2026-10-01 at 15.18.04.png](shots/shot_2026-10-01.png)',
+  ].join('\n');
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Add CSV export',
+      summary: 'Update the libraries in acme/web. Update the base images in the Dockerfile.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: [
+        'Only change the export path.',
+        'Do not embed secrets, tokens, or real PII in build files or CI config.',
+      ],
+      acceptance: ['The export page offers CSV.'],
+    }),
+    {
+      project: 'acme',
+      prompt: source,
+      repos: [web],
+      decisions: [],
+      chunks: [{ text: source, uri: 's3://docs/acme/jira/ACME-12.md' }],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'no-secrets-or-pii',
+          title: 'No secrets, tokens, or real PII.',
+          body: 'No secrets, tokens, or real PII in code, logs, fixtures, or docs.',
+        },
+      ],
+    },
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    return;
+  }
+  expect(parsed.workOrder.summary).toContain('Update the libraries in acme/web.');
+  expect(parsed.workOrder.summary).not.toContain('Dockerfile');
+  expect(parsed.workOrder.summary).not.toContain('base image');
+  expect(parsed.workOrder.summary).toContain('https://example.com/designs/export');
+  expect(parsed.workOrder.summary).toContain('Shot 2026-10-01 at 15.18.04.png');
+  expect(parsed.workOrder.summary).toContain('shot_2026-10-01.png');
+  expect(parsed.workOrder.summary).not.toContain('\n15.18.04.png');
+  expect(parsed.workOrder.summary).toContain('Open the export page');
+  expect(parsed.workOrder.summary).toContain('Choose CSV');
+  expect(parsed.workOrder.constraints).toEqual(['Only change the export path.']);
+  expect(parsed.workOrder.acceptance).toEqual(['The export page offers CSV.']);
 });
 
 test('garbage text is not a work order', () => {

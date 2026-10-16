@@ -64,6 +64,7 @@ export async function draftWorkOrder(input: {
   });
   const parsed = parseDraftModelText(text, {
     project: input.project,
+    prompt: input.prompt,
     repos,
     decisions,
     chunks,
@@ -166,4 +167,4 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 export const DRAFT_SYSTEM_PROMPT =
-  `You draft a work order from the rules, decisions, documents, and repos provided. Return JSON only. If you can draft, return {"intent":"","summary":"","repos":[{"owner":"","repo":""}],"constraints":[""],"acceptance":[""],"citations":{"decisionIds":[],"documentUris":[]}}. Optional paths on a repo if the work is a subtree. If you cannot draft, return {"blocked":"why"}. Use only the provided material. ${RULE_PRECEDENCE} Decisions overrule documents. Project decisions beat global decisions. Do not invent a ticket, path, or repo that is not in the repo list. Repos must be owner/repo pairs from that list. constraints and acceptance must be non-empty arrays. constraints are only what is special to this job. Do not copy or restate a loaded rule. Rules are attached separately. intent is the change in one line. summary is what to do and why. If rules failed to load, blocked.`;
+  `You draft a work order from the rules, decisions, documents, and repos provided. Return JSON only. If you can draft, return {"intent":"","summary":"","repos":[{"owner":"","repo":""}],"constraints":[""],"acceptance":[""],"citations":{"decisionIds":[],"documentUris":[]}}. Optional paths on a repo if the work is a subtree. If you cannot draft, return {"blocked":"why"}. Use only the provided material. ${RULE_PRECEDENCE} Decisions overrule documents. Project decisions beat global decisions. Do not invent a ticket, path, or repo that is not in the repo list. Include a repo only when the source says to change it. A repo named only as a design source or reference is not a target. Repos must be owner/repo pairs from that list. Do not invent how the change is made. If the source does not name a mechanism, do not add one. Copy repro steps, links, and named files from the source into the summary. Copy a URL or a file name as written. constraints and acceptance must be non-empty arrays. constraints are only what is special to this job. Do not copy or restate a loaded rule in the summary, the acceptance, or the constraints, including a paraphrase. Rules are attached separately. intent is the change in one line. summary is what to do and why. If rules failed to load, blocked.`;
