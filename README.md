@@ -1,6 +1,6 @@
-# minivela
+# Minivela
 
-minivela is the open-source, self-hosted baby brother of [Supervela](https://www.supervela.com). It keeps project memory and drafts a one-shot work-order prompt from a Jira ticket and the knowledge base: meeting decisions, notes, and handbooks.
+Minivela is the open-source, self-hosted baby brother of [Supervela](https://www.supervela.com). It keeps project memory and drafts a one-shot work-order prompt from a Jira ticket and the knowledge base: meeting decisions, notes, and handbooks.
 
 ## Components
 
