@@ -36,3 +36,7 @@ npx cdk deploy --profile my-profile --region us-east-1
 The region must be `us-east-1`, `us-east-2`, or `us-west-2`. The stack name defaults to `minivela`.
 
 Uploading transcripts, dropping documents, and invoking the agent are in the [how-to](docs/how-to.md).
+
+## License
+
+[MIT](LICENSE)
