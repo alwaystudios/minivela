@@ -387,6 +387,110 @@ test('a draft keeps source links, file names, and repro steps', () => {
   expect(parsed.workOrder.acceptance).toEqual(['The export page offers CSV.']);
 });
 
+test('a draft drops an unnamed mechanism and a short rule paraphrase', () => {
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Update the libraries',
+      summary: 'Update the libraries in the export page in the container images or package manifests for the export service.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: [
+        'Scope is limited to the export libraries (and any other vulnerable libraries discovered in the same images); do not make unrelated changes.',
+      ],
+      acceptance: ['The export page offers CSV.'],
+    }),
+    {
+      project: 'acme',
+      prompt: [
+        'Update the libraries for the export service.',
+        'Feel free to upgrade other vulnerable libraries at the same time.',
+        'Open the export page.',
+      ].join('\n'),
+      repos: [web],
+      decisions: [],
+      chunks: [],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'small-diffs',
+          title: 'Small diffs. No drive-by refactors.',
+          body: 'Prefer small, reviewable diffs. Do not refactor unrelated code in the same change.',
+        },
+      ],
+    },
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    return;
+  }
+  expect(parsed.workOrder.summary).toContain('in the export page');
+  expect(parsed.workOrder.summary).toContain('for the export service');
+  expect(parsed.workOrder.summary).not.toContain('container');
+  expect(parsed.workOrder.summary).not.toContain('package');
+  expect(parsed.workOrder.summary).not.toContain('manifest');
+  const named = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Update the libraries',
+      summary: 'Update the libraries in the package manifests.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: ['Only change the export path.'],
+      acceptance: ['The export page offers CSV.'],
+    }),
+    {
+      project: 'acme',
+      prompt: 'Update the libraries in the package manifests.',
+      repos: [web],
+      decisions: [],
+      chunks: [],
+      rules: [],
+    },
+  );
+  expect(named.ok).toBe(true);
+  if (!named.ok) {
+    return;
+  }
+  expect(named.workOrder.summary).toContain('in the package manifests');
+  expect(parsed.workOrder.constraints).toEqual([
+    'Scope is limited to the export libraries (and any other vulnerable libraries discovered)',
+  ]);
+});
+
+test('a draft stores a link once and skips the ticket address', () => {
+  const encoded = 'https://example.com/findings?filters=%7B%22status%22%3A%22open%22%7D';
+  const decoded = 'https://example.com/findings?filters={"status":"open"}';
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Update the libraries',
+      summary: `Update the libraries. Findings: ${decoded}`,
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: ['Only change the export path.'],
+      acceptance: ['The export page offers CSV.'],
+    }),
+    {
+      project: 'acme',
+      prompt: [
+        '# ACME-12: Update the libraries',
+        '',
+        '- **URL:** https://example.com/browse/ACME-12',
+        '',
+        `See [${decoded}](${encoded}).`,
+        'Related: https://example.com/browse/ACME-99',
+      ].join('\n'),
+      repos: [web],
+      decisions: [],
+      chunks: [],
+      rules: [],
+    },
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    return;
+  }
+  expect(parsed.workOrder.summary).toContain(decoded);
+  expect(parsed.workOrder.summary).not.toContain(encoded);
+  expect(parsed.workOrder.summary).not.toContain('https://example.com/browse/ACME-12');
+  expect(parsed.workOrder.summary).toContain('https://example.com/browse/ACME-99');
+});
+
 test('garbage text is not a work order', () => {
   expect(parseDraftModelText('not json', { project: 'acme', repos: [web], decisions: [], chunks: [], rules: [] })).toEqual({
     ok: false,

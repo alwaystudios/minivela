@@ -124,7 +124,8 @@ export function parseDraftModelText(
       rulePrecedence: RULE_PRECEDENCE,
       project: input.project,
     },
-    sourceMaterial(input),
+    groundingSource(input, repos),
+    input.prompt ?? '',
   );
   return { ok: true, workOrder, citations };
 }
@@ -241,12 +242,25 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
-function retainDraftFacts(workOrder: WorkOrder, source: string): WorkOrder {
-  const readable = withoutRestatedRules(workOrder);
+function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: string): WorkOrder {
+  const sourceWords = new Set(words(source));
+  const grounded: WorkOrder = {
+    ...workOrder,
+    summary: withoutUngroundedPhrases(workOrder.summary, sourceWords),
+    constraints: workOrder.constraints.flatMap((line) => {
+      const next = withoutUngroundedPhrases(line, sourceWords);
+      return next ? [next] : [];
+    }),
+    acceptance: workOrder.acceptance.flatMap((line) => {
+      const next = withoutUngroundedPhrases(line, sourceWords);
+      return next ? [next] : [];
+    }),
+  };
+  const readable = withoutRestatedRules(grounded);
   const summary = appendMissingAnchors(
-    readable.summary || workOrder.summary,
-    source,
-    [workOrder.intent, readable.summary, ...readable.constraints, ...readable.acceptance].join('\n'),
+    readable.summary || grounded.summary,
+    anchorsFrom,
+    [grounded.intent, readable.summary, ...readable.constraints, ...readable.acceptance].join('\n'),
   );
   return {
     ...workOrder,
@@ -254,6 +268,30 @@ function retainDraftFacts(workOrder: WorkOrder, source: string): WorkOrder {
     constraints: readable.constraints,
     acceptance: readable.acceptance,
   };
+}
+
+function withoutUngroundedPhrases(text: string, sourceWords: Set<string>): string {
+  const stripped = text.replace(
+    /\s+\b(?:in|via|using|through)\b(?:\s+(?!\b(?:for|in|via|using|through)\b)[^,.;\s()]+)+/gi,
+    (phrase) => (ungroundedPhrase(phrase, sourceWords) ? ' ' : phrase),
+  );
+  return tidyPhrase(stripped);
+}
+
+function ungroundedPhrase(phrase: string, sourceWords: Set<string>): boolean {
+  const phraseWords = words(phrase);
+  return phraseWords.length > 0 && phraseWords.every((word) => !sourceWords.has(word));
+}
+
+function tidyPhrase(text: string): string {
+  return text
+    .replace(/\(\s*\)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([,.;])/g, '$1')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constraints: string[]; acceptance: string[] } {
@@ -306,13 +344,16 @@ function sentences(text: string): string[] {
 
 function appendMissingAnchors(summary: string, source: string, haystack: string): string {
   let seen = haystack;
+  const present = urlKeys(haystack);
   const missing: string[] = [];
   for (const anchor of sourceAnchors(source)) {
-    if (seen.includes(anchor)) {
+    const canonical = canonicalUrl(anchor);
+    if (seen.includes(anchor) || seen.includes(canonical) || present.has(canonical)) {
       continue;
     }
     missing.push(anchor);
     seen = `${seen}\n${anchor}`;
+    present.add(canonical);
   }
   if (missing.length === 0) {
     return summary.trim();
@@ -363,8 +404,15 @@ function sourceAnchors(text: string): string[] {
 const FILE_EXT = /\.(?:png|jpe?g|webp|gif|pdf)$/i;
 
 function addUrls(text: string, add: (value: string) => void): void {
+  const key = text.match(/^#\s+([A-Za-z][A-Za-z0-9]*-\d+)\b/m)?.[1];
+  const accept = (value: string) => {
+    if (key && isOwnDocumentUrl(value, key)) {
+      return;
+    }
+    add(value);
+  };
   for (const match of text.matchAll(/\]\((https?:\/\/[^)\s]+)\)/g)) {
-    add(match[1]);
+    accept(match[1]);
   }
   for (const line of text.split(/\r?\n/)) {
     const closer = line.indexOf('](');
@@ -373,9 +421,34 @@ function addUrls(text: string, add: (value: string) => void): void {
       if (closer !== -1 && index < closer && line.lastIndexOf('[', index) !== -1) {
         continue;
       }
-      add(match[0].replace(/[.,;:]+$/, ''));
+      accept(match[0].replace(/[.,;:]+$/, ''));
     }
   }
+}
+
+function isOwnDocumentUrl(url: string, key: string): boolean {
+  try {
+    const path = new URL(url).pathname.replace(/\/+$/, '');
+    return path.endsWith(`/${key}`);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalUrl(url: string): string {
+  try {
+    return decodeURIComponent(url);
+  } catch {
+    return url;
+  }
+}
+
+function urlKeys(text: string): Set<string> {
+  const keys = new Set<string>();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>)\]]+/g)) {
+    keys.add(canonicalUrl(match[0].replace(/[.,;:]+$/, '')));
+  }
+  return keys;
 }
 
 function stepLines(text: string): string[] {
@@ -406,8 +479,20 @@ function stepLines(text: string): string[] {
   return steps;
 }
 
-function sourceMaterial(input: { prompt?: string }): string {
-  return input.prompt ?? '';
+function groundingSource(
+  input: {
+    prompt?: string;
+    project: string;
+    decisions: Array<{ title?: string; content?: string; quote?: string }>;
+  },
+  repos: WorkOrderRepo[],
+): string {
+  return [
+    input.prompt ?? '',
+    input.project,
+    ...repos.flatMap((repo) => [repo.owner, repo.repo, ...(repo.paths ?? [])]),
+    ...input.decisions.flatMap((decision) => [decision.title ?? '', decision.content ?? '', decision.quote ?? '']),
+  ].join('\n');
 }
 
 function restatesRule(constraint: string, rules: Rule[]): boolean {
@@ -417,12 +502,18 @@ function restatesRule(constraint: string, rules: Rule[]): boolean {
   }
   return rules.some((rule) => {
     const ruleWords = new Set(words(`${rule.title} ${rule.body}`));
-    const shared = [...constraintWords].filter((word) => ruleWords.has(word)).length;
-    if (constraintWords.size >= 4 && shared / constraintWords.size >= 0.6) {
+    const sharedWords = [...constraintWords].filter((word) => ruleWords.has(word));
+    if (constraintWords.size >= 4 && sharedWords.length / constraintWords.size >= 0.6) {
       return true;
     }
-    if (constraintWords.size < 4 && shared === constraintWords.size) {
+    if (constraintWords.size < 4 && sharedWords.length === constraintWords.size) {
       return true;
+    }
+    if (constraintWords.size === 3 && sharedWords.length >= 2) {
+      const fillers = [...constraintWords].filter((word) => !ruleWords.has(word));
+      if (fillers.every((word) => word.length <= 4)) {
+        return true;
+      }
     }
     const titleWords = words(rule.title);
     if (titleWords.length >= 3 && titleWords.every((word) => constraintWords.has(word))) {
