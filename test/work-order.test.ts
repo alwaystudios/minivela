@@ -151,19 +151,17 @@ Add CSV export in acme/web.
 
 - Query path covered by a test.
 
-## Rules
+## Global rules
 
 ${RULE_PRECEDENCE}
 
 ### Comment every function
 
-\`global\` / \`function-comment\`
-
 Always start a function with a comment.
 
-### CSV only
+## acme rules
 
-\`acme\` / \`csv-only\`
+### CSV only
 
 Do not add Excel.
 
@@ -200,13 +198,14 @@ test('markdown keeps a heading and a bullet on one line', () => {
   expect(markdown).toContain('Add export\n\\# not a heading');
   expect(markdown).toContain('- Stay small # still a bullet');
   expect(markdown).toContain('### Small diffs # not a second heading');
+  expect(markdown).not.toContain('small-diffs');
   expect(markdown.match(/^## .+$/gm)).toEqual([
     '## Intent',
     '## Summary',
     '## Repos',
     '## Constraints',
     '## Acceptance',
-    '## Rules',
+    '## Global rules',
   ]);
 });
 
@@ -310,7 +309,9 @@ test('a draft with no citations omits that section', () => {
     },
     citations: { decisionIds: [], documentUris: [] },
   });
+  expect(markdown).toContain('## Global rules');
   expect(markdown).toContain(RULE_PRECEDENCE);
+  expect(markdown).not.toContain('## acme rules');
   expect(markdown).not.toContain('## Citations');
   expect(markdown).not.toContain('### ');
 });
