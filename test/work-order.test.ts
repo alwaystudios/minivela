@@ -213,20 +213,20 @@ test('markdown keeps a heading and a bullet on one line', () => {
 test('markdown leaves out a constraint that restates a rule and cites the decision', () => {
   const markdown = formatDraftMarkdown(
     {
-      project: 'bpp',
+      project: 'acme',
       draftId: 'draft-1',
       createdAt: '2026-10-16T07:22:19.216Z',
       workOrder: {
-        intent: 'Update the loading state',
-        summary: 'Match Scholar.',
-        repos: [{ owner: 'BPP-Education-Group', repo: 'learn-lxp' }],
+        intent: 'Add CSV export',
+        summary: 'Add CSV export in acme/web.',
+        repos: [{ owner: 'acme', repo: 'web' }],
         constraints: [
-          'Only change the loading state UI for the topic-to-content path.',
+          'Only change the CSV export path.',
           'Do not widen any auth, tenancy, or public API surface as part of this change.',
           'No secrets, tokens, or real PII in code, fixtures, or test data.',
           'Keep functions and variable names clear and descriptive; avoid clever or overly terse implementations.',
         ],
-        acceptance: ['The loading state matches the design.'],
+        acceptance: ['Query path covered by a test.'],
         rules: [
           {
             project: 'global',
@@ -254,18 +254,18 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
     [
       {
         decisionId: 'abc',
-        quote: 'It should match Scholar.',
+        quote: 'Excel is out of scope.',
         speaker: 'Alex',
         loggedAt: '2026-10-16T07:00:00.000Z',
       },
     ],
   );
-  expect(markdown).toContain('- Only change the loading state UI for the topic-to-content path.');
+  expect(markdown).toContain('- Only change the CSV export path.');
   expect(markdown).not.toContain('Do not widen any auth');
   expect(markdown).not.toContain('No secrets, tokens, or real PII in code, fixtures');
   expect(markdown).not.toContain('Keep functions and variable names');
   expect(markdown).toContain('### Do not silently widen auth, tenancy, or public API.');
-  expect(markdown).toContain('quote: It should match Scholar.');
+  expect(markdown).toContain('quote: Excel is out of scope.');
   expect(markdown).toContain('speaker: Alex');
   expect(markdown).toContain('loggedAt: 2026-10-16T07:00:00.000Z');
 });
