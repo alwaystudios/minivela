@@ -65,15 +65,7 @@ export function formatDraftMarkdown(
   if (readable.acceptance.length > 0) {
     lines.push('', '## Acceptance', '', ...readable.acceptance.map((line) => `- ${oneLine(line)}`));
   }
-  lines.push(
-    '',
-    '## Rules',
-    '',
-    workOrder.rulePrecedence,
-  );
-  if (workOrder.rules.length > 0) {
-    lines.push('', ...ruleBlocks(workOrder.rules));
-  }
+  lines.push(...ruleSections(workOrder.rules, workOrder.rulePrecedence));
   const citations = citationLines(item.citations, decisions);
   if (citations.length > 0) {
     lines.push('', '## Citations', '', ...citations);
@@ -143,15 +135,36 @@ function repoLine(repo: WorkOrderRepo): string {
   return paths && paths.length > 0 ? `- ${label} (${paths.join(', ')})` : `- ${label}`;
 }
 
+function ruleSections(rules: Rule[], precedence: string): string[] {
+  const globalRules = rules.filter((rule) => rule.project.trim() === 'global');
+  const clientProjects: string[] = [];
+  const clientRules = new Map<string, Rule[]>();
+  for (const rule of rules) {
+    const project = rule.project.trim();
+    if (project === 'global') {
+      continue;
+    }
+    const group = clientRules.get(project);
+    if (group) {
+      group.push(rule);
+      continue;
+    }
+    clientProjects.push(project);
+    clientRules.set(project, [rule]);
+  }
+  const lines = ['', '## Global rules', '', precedence];
+  if (globalRules.length > 0) {
+    lines.push('', ...ruleBlocks(globalRules));
+  }
+  for (const project of clientProjects) {
+    lines.push('', `## ${oneLine(project)} rules`, '', ...ruleBlocks(clientRules.get(project) ?? []));
+  }
+  return lines;
+}
+
 function ruleBlocks(rules: Rule[]): string[] {
   return rules.flatMap((rule, index) => {
-    const block = [
-      `### ${oneLine(rule.title)}`,
-      '',
-      `\`${oneLine(rule.project)}\` / \`${oneLine(rule.ruleId)}\``,
-      '',
-      safeBlock(rule.body),
-    ];
+    const block = [`### ${oneLine(rule.title)}`, '', safeBlock(rule.body)];
     return index === 0 ? block : ['', ...block];
   });
 }
