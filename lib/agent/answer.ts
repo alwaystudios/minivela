@@ -20,15 +20,29 @@ export type InvokeSkill = 'check-readiness' | 'draft-work-order';
 
 export function parseInvokePayload(
   raw: unknown,
-): { prompt: string; project: string; skill?: InvokeSkill; format?: DraftResponseFormat } | AnswerResult {
+):
+  | { prompt: string; project: string; skill?: InvokeSkill; format?: DraftResponseFormat }
+  | { project: string; draftId: string; format?: DraftResponseFormat }
+  | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { response: 'Send JSON with prompt and project.', status: 'error' };
   }
-  const body = raw as { prompt?: unknown; project?: unknown; skill?: unknown; format?: unknown };
+  const body = raw as { prompt?: unknown; project?: unknown; skill?: unknown; format?: unknown; draftId?: unknown };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   const project = typeof body.project === 'string' ? body.project.trim() : '';
+  const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : '';
   if (!project) {
     return { response: 'Name a project. The agent will not search without one.', status: 'error' };
+  }
+  const format = parseFormat(body.format);
+  if (typeof format !== 'string' && format !== undefined) {
+    return format;
+  }
+  if (draftId) {
+    if (prompt || (body.skill !== undefined && body.skill !== '')) {
+      return { response: 'draftId fetches a stored draft. Omit prompt and skill.', status: 'error' };
+    }
+    return format ? { project, draftId, format } : { project, draftId };
   }
   if (!prompt) {
     return { response: 'Ask a question in prompt.', status: 'error' };
@@ -42,16 +56,30 @@ export function parseInvokePayload(
     return { response: 'skill must be check-readiness or draft-work-order when set.', status: 'error' };
   }
   const skill = body.skill === 'check-readiness' || body.skill === 'draft-work-order' ? body.skill : undefined;
-  if (body.format === undefined || body.format === '') {
+  if (format === undefined) {
     return skill ? { prompt, project, skill } : { prompt, project };
-  }
-  if (body.format !== 'json' && body.format !== 'markdown') {
-    return { response: 'format must be json or markdown when set.', status: 'error' };
   }
   if (skill !== 'draft-work-order') {
     return { response: 'format is only valid with skill draft-work-order.', status: 'error' };
   }
-  return { prompt, project, skill, format: body.format };
+  return { prompt, project, skill, format };
+}
+
+function parseFormat(value: unknown): DraftResponseFormat | undefined | AnswerResult {
+  if (value === undefined || value === '') {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    return { response: 'format must be json or markdown when set.', status: 'error' };
+  }
+  const format = value.trim();
+  if (format === '') {
+    return undefined;
+  }
+  if (format !== 'json' && format !== 'markdown') {
+    return { response: 'format must be json or markdown when set.', status: 'error' };
+  }
+  return format;
 }
 
 export async function answerFromMemory(input: {

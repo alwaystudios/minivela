@@ -1,5 +1,5 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
-import { draftWorkOrder } from '../lib/agent/draft.js';
+import { DRAFT_SYSTEM_PROMPT, draftWorkOrder, readWorkOrder } from '../lib/agent/draft.js';
 import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
@@ -67,6 +67,33 @@ test('format is rejected unless the skill is draft-work-order', () => {
   });
   expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft-work-order', format: 'yaml' })).toEqual({
     response: 'format must be json or markdown when set.',
+    status: 'error',
+  });
+});
+
+test('a stored draft is fetched by id', () => {
+  expect(
+    parseInvokePayload({
+      project: 'bpp',
+      draftId: 'c23a8e2b-8ec9-4c09-bee5-c89acc1b7e63',
+      format: 'markdown',
+    }),
+  ).toEqual({
+    project: 'bpp',
+    draftId: 'c23a8e2b-8ec9-4c09-bee5-c89acc1b7e63',
+    format: 'markdown',
+  });
+});
+
+test('a fetch rejects a prompt or a skill', () => {
+  expect(
+    parseInvokePayload({
+      prompt: 'add CSV export',
+      project: 'bpp',
+      draftId: 'c23a8e2b-8ec9-4c09-bee5-c89acc1b7e63',
+    }),
+  ).toEqual({
+    response: 'draftId fetches a stored draft. Omit prompt and skill.',
     status: 'error',
   });
 });
@@ -277,7 +304,19 @@ test('draft-work-order can return the stored draft as markdown', async () => {
     prompt: 'add CSV export',
     project: 'acme',
     retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
-    searchDecisions: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([
+      {
+        project: 'acme',
+        decisionId: 'abc',
+        title: 'CSV only',
+        content: 'v1 ships CSV.',
+        quote: 'Excel is out of scope.',
+        speaker: 'Marcus Webb',
+        timestamp: '00:00:20.500',
+        loggedAt: '2026-10-15T12:00:00.000Z',
+        sourceKey: 'acme/transcripts/standup.vtt',
+      },
+    ]),
     loadRules: jest.fn().mockResolvedValue([
       {
         project: 'global',
@@ -304,7 +343,83 @@ test('draft-work-order can return the stored draft as markdown', async () => {
   expect(result.response).toContain('## Intent');
   expect(result.response).toContain('Add CSV export');
   expect(result.response).toContain(RULE_PRECEDENCE);
+  expect(result.response).toContain('quote: Excel is out of scope.');
+  expect(result.response).toContain('loggedAt: 2026-10-15T12:00:00.000Z');
+  expect(result.response).toContain('speaker: Marcus Webb');
   expect(result.response).not.toContain('"draftId"');
+  expect(JSON.stringify(put.mock.calls[0][0])).not.toContain('## Intent');
+});
+
+test('the draft prompt tells the model not to restate rules as constraints', () => {
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule.');
+});
+
+const storedDraft = {
+  project: 'bpp',
+  draftId: 'c23a8e2b-8ec9-4c09-bee5-c89acc1b7e63',
+  createdAt: '2026-10-16T07:22:19.216Z',
+  workOrder: {
+    intent: 'Update the loading state',
+    summary: 'Match Scholar.',
+    repos: [{ owner: 'BPP-Education-Group', repo: 'learn-lxp' }],
+    constraints: ['Use the Scholar skeleton.'],
+    acceptance: ['The loading state matches the design.'],
+    rules: [],
+    rulePrecedence: RULE_PRECEDENCE,
+    project: 'bpp',
+  },
+  citations: { decisionIds: ['abc'], documentUris: ['s3://doc/LEARN-3048.md'] },
+};
+
+test('read by id returns the stored json and writes nothing', async () => {
+  const get = jest.fn().mockResolvedValue(storedDraft);
+  const loadDecisions = jest.fn();
+  const result = await readWorkOrder({
+    project: 'bpp',
+    draftId: storedDraft.draftId,
+    get,
+    loadDecisions,
+  });
+  expect(get).toHaveBeenCalledWith({ project: 'bpp', draftId: storedDraft.draftId });
+  expect(loadDecisions).not.toHaveBeenCalled();
+  expect(JSON.parse(result.response).draftId).toBe(storedDraft.draftId);
+  expect(result.status).toBe('success');
+});
+
+test('read by id can return markdown for that row', async () => {
+  const result = await readWorkOrder({
+    project: 'bpp',
+    draftId: storedDraft.draftId,
+    format: 'markdown',
+    get: jest.fn().mockResolvedValue(storedDraft),
+    loadDecisions: jest.fn().mockResolvedValue([
+      {
+        project: 'bpp',
+        decisionId: 'abc',
+        title: 'Match Scholar',
+        content: 'Use the Scholar loading state.',
+        quote: 'It should match Scholar.',
+        speaker: 'Alex',
+        timestamp: '00:01:00.000',
+        loggedAt: '2026-10-16T07:00:00.000Z',
+        sourceKey: 'bpp/transcripts/review.vtt',
+      },
+    ]),
+  });
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('Draft: c23a8e2b-8ec9-4c09-bee5-c89acc1b7e63');
+  expect(result.response).toContain('quote: It should match Scholar.');
+  expect(result.response).not.toContain('"workOrder"');
+});
+
+test('read by id misses a draft that is not stored', async () => {
+  const result = await readWorkOrder({
+    project: 'bpp',
+    draftId: 'missing',
+    get: jest.fn().mockResolvedValue(undefined),
+    loadDecisions: jest.fn(),
+  });
+  expect(result).toEqual({ response: 'No draft with that id.', status: 'error' });
 });
 
 test('draft-work-order does not store when rules fail to load', async () => {

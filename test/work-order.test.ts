@@ -174,6 +174,102 @@ Do not add Excel.
 `);
 });
 
+test('markdown keeps a heading and a bullet on one line', () => {
+  const markdown = formatDraftMarkdown({
+    project: 'acme',
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+    workOrder: {
+      intent: 'Add export\n# not a heading',
+      summary: 'Do the thing.',
+      repos: [{ owner: 'acme', repo: 'web' }],
+      constraints: ['Stay small\n# still a bullet'],
+      acceptance: ['A test covers it.'],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'small-diffs',
+          title: 'Small diffs\n# not a second heading',
+          body: 'Prefer small diffs.',
+        },
+      ],
+      rulePrecedence: RULE_PRECEDENCE,
+    },
+    citations: { decisionIds: [], documentUris: [] },
+  });
+  expect(markdown).toContain('Add export\n\\# not a heading');
+  expect(markdown).toContain('- Stay small # still a bullet');
+  expect(markdown).toContain('### Small diffs # not a second heading');
+  expect(markdown.match(/^## .+$/gm)).toEqual([
+    '## Intent',
+    '## Summary',
+    '## Repos',
+    '## Constraints',
+    '## Acceptance',
+    '## Rules',
+  ]);
+});
+
+test('markdown leaves out a constraint that restates a rule and cites the decision', () => {
+  const markdown = formatDraftMarkdown(
+    {
+      project: 'bpp',
+      draftId: 'draft-1',
+      createdAt: '2026-10-16T07:22:19.216Z',
+      workOrder: {
+        intent: 'Update the loading state',
+        summary: 'Match Scholar.',
+        repos: [{ owner: 'BPP-Education-Group', repo: 'learn-lxp' }],
+        constraints: [
+          'Only change the loading state UI for the topic-to-content path.',
+          'Do not widen any auth, tenancy, or public API surface as part of this change.',
+          'No secrets, tokens, or real PII in code, fixtures, or test data.',
+          'Keep functions and variable names clear and descriptive; avoid clever or overly terse implementations.',
+        ],
+        acceptance: ['The loading state matches the design.'],
+        rules: [
+          {
+            project: 'global',
+            ruleId: 'do-not-widen-auth',
+            title: 'Do not silently widen auth, tenancy, or public API.',
+            body: 'Do not widen auth, tenancy, or public API surface without calling it out in the PR.',
+          },
+          {
+            project: 'global',
+            ruleId: 'no-secrets-or-pii',
+            title: 'No secrets, tokens, or real PII.',
+            body: 'No secrets, tokens, or real PII in code, logs, fixtures, or docs.',
+          },
+          {
+            project: 'global',
+            ruleId: 'clear-names-small-functions',
+            title: 'Prefer clear names and small functions over cleverness.',
+            body: 'Prefer human-readable code: clear names, small functions, obvious control flow.',
+          },
+        ],
+        rulePrecedence: RULE_PRECEDENCE,
+      },
+      citations: { decisionIds: ['abc'], documentUris: [] },
+    },
+    [
+      {
+        decisionId: 'abc',
+        quote: 'It should match Scholar.',
+        speaker: 'Alex',
+        loggedAt: '2026-10-16T07:00:00.000Z',
+      },
+    ],
+  );
+  expect(markdown).toContain('- Only change the loading state UI for the topic-to-content path.');
+  expect(markdown).not.toContain('Do not widen any auth');
+  expect(markdown).not.toContain('No secrets, tokens, or real PII in code, fixtures');
+  expect(markdown).not.toContain('Keep functions and variable names');
+  expect(markdown).toContain('### Do not silently widen auth, tenancy, or public API.');
+  expect(markdown).toContain('quote: It should match Scholar.');
+  expect(markdown).toContain('speaker: Alex');
+  expect(markdown).toContain('loggedAt: 2026-10-16T07:00:00.000Z');
+});
+
 test('a draft with no citations omits that section', () => {
   const markdown = formatDraftMarkdown({
     project: 'acme',
