@@ -215,6 +215,7 @@ test('the knowledge base reads the documents bucket only', () => {
   expect(templateJson).toContain('dynamodb:SearchVectors');
   expect(templateJson).toContain('dynamodb:Query');
   expect(templateJson).toContain('dynamodb:PutItem');
+  expect(templateJson).toContain('dynamodb:GetItem');
   expect(templateJson).toContain(`/index/${DECISIONS_VECTOR_INDEX}`);
 });
 

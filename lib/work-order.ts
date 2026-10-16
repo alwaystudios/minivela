@@ -1,4 +1,5 @@
 import type { Repo, Rule } from './lookup.js';
+import type { RetrievedDecision } from './search-decisions.js';
 
 export type WorkOrderRepo = {
   owner: string;
@@ -32,6 +33,54 @@ export type DraftWrite = {
   citations: DraftCitations;
   createdAt: string;
 };
+
+export type DraftResponseFormat = 'json' | 'markdown';
+
+export function formatDraftMarkdown(
+  item: DraftWrite,
+  decisions: Array<Pick<RetrievedDecision, 'decisionId' | 'quote' | 'speaker' | 'loggedAt'>> = [],
+): string {
+  const { workOrder } = item;
+  const constraints = workOrder.constraints.filter((line) => !restatesRule(line, workOrder.rules));
+  const lines = [
+    `Project: ${item.project}`,
+    `Draft: ${item.draftId}`,
+    `Created: ${item.createdAt}`,
+    '',
+    '## Intent',
+    '',
+    safeBlock(workOrder.intent),
+    '',
+    '## Summary',
+    '',
+    safeBlock(workOrder.summary),
+    '',
+    '## Repos',
+    '',
+    ...workOrder.repos.map(repoLine),
+  ];
+  if (constraints.length > 0) {
+    lines.push('', '## Constraints', '', ...constraints.map((line) => `- ${oneLine(line)}`));
+  }
+  lines.push(
+    '',
+    '## Acceptance',
+    '',
+    ...workOrder.acceptance.map((line) => `- ${oneLine(line)}`),
+    '',
+    '## Rules',
+    '',
+    workOrder.rulePrecedence,
+  );
+  if (workOrder.rules.length > 0) {
+    lines.push('', ...ruleBlocks(workOrder.rules));
+  }
+  const citations = citationLines(item.citations, decisions);
+  if (citations.length > 0) {
+    lines.push('', '## Citations', '', ...citations);
+  }
+  return `${lines.join('\n')}\n`;
+}
 
 export type DraftParse =
   | { ok: true; workOrder: WorkOrder; citations: DraftCitations }
@@ -83,6 +132,125 @@ export function parseDraftModelText(
     project: input.project,
   };
   return { ok: true, workOrder, citations };
+}
+
+function repoLine(repo: WorkOrderRepo): string {
+  const label = `${oneLine(repo.owner)}/${oneLine(repo.repo)}`;
+  const paths = repo.paths?.map(oneLine).filter((path) => path.length > 0);
+  return paths && paths.length > 0 ? `- ${label} (${paths.join(', ')})` : `- ${label}`;
+}
+
+function ruleBlocks(rules: Rule[]): string[] {
+  return rules.flatMap((rule, index) => {
+    const block = [
+      `### ${oneLine(rule.title)}`,
+      '',
+      `\`${oneLine(rule.project)}\` / \`${oneLine(rule.ruleId)}\``,
+      '',
+      safeBlock(rule.body),
+    ];
+    return index === 0 ? block : ['', ...block];
+  });
+}
+
+function citationLines(
+  citations: DraftCitations,
+  decisions: Array<Pick<RetrievedDecision, 'decisionId' | 'quote' | 'speaker' | 'loggedAt'>>,
+): string[] {
+  const byId = new Map(decisions.map((decision) => [decision.decisionId, decision]));
+  const lines: string[] = [];
+  for (const id of citations.decisionIds) {
+    lines.push(`- decision ${oneLine(id)}`);
+    const decision = byId.get(id);
+    if (!decision) {
+      continue;
+    }
+    lines.push(`  loggedAt: ${oneLine(decision.loggedAt)}`);
+    const speaker = oneLine(decision.speaker);
+    if (speaker) {
+      lines.push(`  speaker: ${speaker}`);
+    }
+    const quote = safeBlock(decision.quote);
+    if (quote) {
+      lines.push(`  quote: ${quote.replace(/\n/g, '\n  ')}`);
+    }
+  }
+  for (const uri of citations.documentUris) {
+    lines.push(`- ${oneLine(uri)}`);
+  }
+  return lines;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').replace(/[ \t]+/g, ' ').trim();
+}
+
+function safeBlock(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => {
+      const hash = line.indexOf('#');
+      if (hash === -1 || line.slice(0, hash).trim() !== '') {
+        return line;
+      }
+      return `${line.slice(0, hash)}\\${line.slice(hash)}`;
+    })
+    .join('\n')
+    .trim();
+}
+
+const RULE_WORD_STOP = new Set([
+  'this',
+  'that',
+  'with',
+  'from',
+  'into',
+  'only',
+  'your',
+  'they',
+  'them',
+  'then',
+  'than',
+  'have',
+  'does',
+  'will',
+  'when',
+  'what',
+  'were',
+  'been',
+  'also',
+  'such',
+  'same',
+  'part',
+]);
+
+function restatesRule(constraint: string, rules: Rule[]): boolean {
+  const constraintWords = new Set(words(constraint));
+  if (constraintWords.size < 4) {
+    return false;
+  }
+  return rules.some((rule) => {
+    const ruleWords = new Set(words(`${rule.title} ${rule.body}`));
+    const shared = [...constraintWords].filter((word) => ruleWords.has(word)).length;
+    if (shared / constraintWords.size >= 0.6) {
+      return true;
+    }
+    const titleWords = words(rule.title);
+    if (titleWords.length < 5) {
+      return false;
+    }
+    const titleShared = titleWords.filter((word) => constraintWords.has(word)).length;
+    return titleShared / titleWords.length >= 0.6;
+  });
+}
+
+function words(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length >= 4 && !RULE_WORD_STOP.has(word))
+    .map((word) => word.replace(/(ness|tions|tion|ing|ly|s)$/, ''));
 }
 
 function parseJsonObject(text: string): unknown {

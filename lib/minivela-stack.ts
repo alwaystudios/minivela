@@ -310,6 +310,12 @@ export class MinivelaStack extends cdk.Stack {
     );
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [decisions.tableArn, drafts.tableArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
         actions: ['dynamodb:Query'],
         resources: [rules.tableArn, repos.tableArn],
       }),

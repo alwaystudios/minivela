@@ -1,5 +1,5 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
-import { draftWorkOrder } from '../lib/agent/draft.js';
+import { DRAFT_SYSTEM_PROMPT, draftWorkOrder, readWorkOrder } from '../lib/agent/draft.js';
 import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
@@ -41,6 +41,60 @@ test('draft-work-order is accepted as a skill', () => {
     prompt: 'add CSV export',
     project: 'acme',
     skill: 'draft-work-order',
+  });
+});
+
+test('markdown format is accepted on draft-work-order', () => {
+  expect(
+    parseInvokePayload({
+      prompt: 'add CSV export',
+      project: 'acme',
+      skill: 'draft-work-order',
+      format: 'markdown',
+    }),
+  ).toEqual({
+    prompt: 'add CSV export',
+    project: 'acme',
+    skill: 'draft-work-order',
+    format: 'markdown',
+  });
+});
+
+test('format is rejected unless the skill is draft-work-order', () => {
+  expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', format: 'markdown' })).toEqual({
+    response: 'format is only valid with skill draft-work-order.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft-work-order', format: 'yaml' })).toEqual({
+    response: 'format must be json or markdown when set.',
+    status: 'error',
+  });
+});
+
+test('a stored draft is fetched by id', () => {
+  expect(
+    parseInvokePayload({
+      project: 'acme',
+      draftId: 'draft-1',
+      format: 'markdown',
+    }),
+  ).toEqual({
+    project: 'acme',
+    draftId: 'draft-1',
+    format: 'markdown',
+  });
+});
+
+test('a fetch rejects a prompt or a skill', () => {
+  expect(
+    parseInvokePayload({
+      prompt: 'add CSV export',
+      project: 'acme',
+      draftId: 'draft-1',
+    }),
+  ).toEqual({
+    response: 'draftId fetches a stored draft. Omit prompt and skill.',
+    status: 'error',
   });
 });
 
@@ -242,6 +296,130 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
   });
   expect(result.status).toBe('success');
   expect(JSON.parse(result.response).draftId).toBe('draft-1');
+});
+
+test('draft-work-order can return the stored draft as markdown', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+    searchDecisions: jest.fn().mockResolvedValue([
+      {
+        project: 'acme',
+        decisionId: 'abc',
+        title: 'CSV only',
+        content: 'v1 ships CSV.',
+        quote: 'Excel is out of scope.',
+        speaker: 'Marcus Webb',
+        timestamp: '00:00:20.500',
+        loggedAt: '2026-10-15T12:00:00.000Z',
+        sourceKey: 'acme/transcripts/standup.vtt',
+      },
+    ]),
+    loadRules: jest.fn().mockResolvedValue([
+      {
+        project: 'global',
+        ruleId: 'function-comment',
+        title: 'Comment every function',
+        body: 'Always start a function with a comment.',
+      },
+    ]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: jest.fn().mockResolvedValue(validDraftJson),
+    put,
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+    format: 'markdown',
+  });
+  expect(put).toHaveBeenCalledWith(
+    expect.objectContaining({
+      project: 'acme',
+      draftId: 'draft-1',
+      workOrder: expect.objectContaining({ intent: 'Add CSV export', rulePrecedence: RULE_PRECEDENCE }),
+    }),
+  );
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('## Intent');
+  expect(result.response).toContain('Add CSV export');
+  expect(result.response).toContain(RULE_PRECEDENCE);
+  expect(result.response).toContain('quote: Excel is out of scope.');
+  expect(result.response).toContain('loggedAt: 2026-10-15T12:00:00.000Z');
+  expect(result.response).toContain('speaker: Marcus Webb');
+  expect(result.response).not.toContain('"draftId"');
+  expect(JSON.stringify(put.mock.calls[0][0])).not.toContain('## Intent');
+});
+
+test('the draft prompt tells the model not to restate rules as constraints', () => {
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule.');
+});
+
+const storedDraft = {
+  project: 'acme',
+  draftId: 'draft-1',
+  createdAt: '2026-10-16T07:22:19.216Z',
+  workOrder: {
+    intent: 'Add CSV export',
+    summary: 'Add CSV export in acme/web.',
+    repos: [{ owner: 'acme', repo: 'web' }],
+    constraints: ['Match existing patterns in acme/web.'],
+    acceptance: ['Query path covered by a test.'],
+    rules: [],
+    rulePrecedence: RULE_PRECEDENCE,
+    project: 'acme',
+  },
+  citations: { decisionIds: ['abc'], documentUris: ['s3://doc/rfc.md'] },
+};
+
+test('read by id returns the stored json and writes nothing', async () => {
+  const get = jest.fn().mockResolvedValue(storedDraft);
+  const loadDecisions = jest.fn();
+  const result = await readWorkOrder({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    get,
+    loadDecisions,
+  });
+  expect(get).toHaveBeenCalledWith({ project: 'acme', draftId: storedDraft.draftId });
+  expect(loadDecisions).not.toHaveBeenCalled();
+  expect(JSON.parse(result.response).draftId).toBe(storedDraft.draftId);
+  expect(result.status).toBe('success');
+});
+
+test('read by id can return markdown for that row', async () => {
+  const result = await readWorkOrder({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    format: 'markdown',
+    get: jest.fn().mockResolvedValue(storedDraft),
+    loadDecisions: jest.fn().mockResolvedValue([
+      {
+        project: 'acme',
+        decisionId: 'abc',
+        title: 'CSV only',
+        content: 'v1 ships CSV.',
+        quote: 'Excel is out of scope.',
+        speaker: 'Alex',
+        timestamp: '00:01:00.000',
+        loggedAt: '2026-10-16T07:00:00.000Z',
+        sourceKey: 'acme/transcripts/review.vtt',
+      },
+    ]),
+  });
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('Draft: draft-1');
+  expect(result.response).toContain('quote: Excel is out of scope.');
+  expect(result.response).not.toContain('"workOrder"');
+});
+
+test('read by id misses a draft that is not stored', async () => {
+  const result = await readWorkOrder({
+    project: 'acme',
+    draftId: 'missing',
+    get: jest.fn().mockResolvedValue(undefined),
+    loadDecisions: jest.fn(),
+  });
+  expect(result).toEqual({ response: 'No draft with that id.', status: 'error' });
 });
 
 test('draft-work-order does not store when rules fail to load', async () => {

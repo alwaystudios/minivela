@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
-import { DynamoDBClient, QueryCommand, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient, GetItemCommand, QueryCommand, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { embedText } from '../embed.js';
 import {
   loadPartitions,
@@ -17,6 +17,7 @@ import {
 } from '../lookup.js';
 import { EXTRACT_MODEL_ID } from '../models.js';
 import {
+  decisionFromItem,
   decisionsSearchInput,
   scoredDecisionsFromSearchResults,
   searchDecisionsAcrossProjects,
@@ -25,7 +26,7 @@ import {
 } from '../search-decisions.js';
 import type { DraftWrite } from '../work-order.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
-import { draftWorkOrder, DRAFT_SYSTEM_PROMPT } from './draft.js';
+import { draftWorkOrder, DRAFT_SYSTEM_PROMPT, readWorkOrder } from './draft.js';
 import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
 
 const retrieveClient = new BedrockAgentRuntimeClient({});
@@ -313,6 +314,37 @@ async function putDraft(item: DraftWrite): Promise<void> {
   );
 }
 
+async function getDraft(key: { project: string; draftId: string }): Promise<unknown> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: requiredEnv('DRAFTS_TABLE_NAME'),
+      Key: key,
+    }),
+  );
+  return result.Item;
+}
+
+async function loadCitedDecisions(project: string, ids: string[]): Promise<RetrievedDecision[]> {
+  const partitions = project === 'global' ? ['global'] : [project, 'global'];
+  const found: RetrievedDecision[] = [];
+  for (const id of ids) {
+    for (const partition of partitions) {
+      const result = await dynamodb.send(
+        new GetItemCommand({
+          TableName: requiredEnv('DECISIONS_TABLE_NAME'),
+          Key: { project: { S: partition }, decisionId: { S: id } },
+        }),
+      );
+      const decision = decisionFromItem(result.Item);
+      if (decision) {
+        found.push(decision);
+        break;
+      }
+    }
+  }
+  return found;
+}
+
 async function handleInvocations(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const rawText = await readBody(req);
   let parsed: unknown = {};
@@ -327,6 +359,17 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
   const parsedPayload = parseInvokePayload(parsed);
   if ('status' in parsedPayload) {
     json(res, 400, parsedPayload);
+    return;
+  }
+  if ('draftId' in parsedPayload) {
+    const result = await readWorkOrder({
+      project: parsedPayload.project,
+      draftId: parsedPayload.draftId,
+      format: parsedPayload.format,
+      get: getDraft,
+      loadDecisions: (ids) => loadCitedDecisions(parsedPayload.project, ids),
+    });
+    json(res, 200, result);
     return;
   }
   const result =
@@ -352,6 +395,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             put: putDraft,
             draftId: randomUUID(),
             createdAt: new Date().toISOString(),
+            format: parsedPayload.format,
           })
         : await answerFromMemory({
             prompt: parsedPayload.prompt,
