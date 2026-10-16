@@ -13,7 +13,7 @@ import {
 } from '../lib/search-decisions.js';
 
 const csv: RetrievedDecision = {
-  project: 'bpp',
+  project: 'acme',
   decisionId: 'abc',
   title: 'CSV only',
   content: 'v1 ships CSV, not Excel.',
@@ -21,7 +21,7 @@ const csv: RetrievedDecision = {
   speaker: 'Marcus Webb',
   timestamp: '00:00:20.500',
   loggedAt: '2026-10-15T12:00:00.000Z',
-  sourceKey: 'bpp/transcripts/standup.vtt',
+  sourceKey: 'acme/transcripts/standup.vtt',
 };
 
 function scored(decision: RetrievedDecision, score: number): ScoredDecision {
@@ -31,14 +31,14 @@ function scored(decision: RetrievedDecision, score: number): ScoredDecision {
 test('search is equality on one project because the vector index hashes project', () => {
   const input = decisionsSearchInput({
     tableName: 'decisions',
-    project: 'bpp',
+    project: 'acme',
     embedding: [0.1, -0.2],
   });
   expect(input.IndexName).toBe(DECISIONS_VECTOR_INDEX);
   expect(input.SearchConditionExpression).toBe('#p = :p');
   expect(input.SearchConditionExpression).not.toMatch(/IN/i);
   expect(input.ExpressionAttributeNames['#p']).toBe('project');
-  expect(input.ExpressionAttributeValues[':p']).toEqual({ S: 'bpp' });
+  expect(input.ExpressionAttributeValues[':p']).toEqual({ S: 'acme' });
   expect(input.SearchVector).toEqual(searchVectorFromEmbedding([0.1, -0.2]));
 });
 
@@ -47,12 +47,12 @@ test('a client search hits that client then global', async () => {
     scored({ ...csv, project, decisionId: project, title: `${project} topic` }, 0.1),
   ]);
   const found = await searchDecisionsAcrossProjects({
-    project: 'bpp',
+    project: 'acme',
     embedding: [1],
     searchOne,
   });
-  expect(searchOne.mock.calls.map((call) => call[0])).toEqual(['bpp', 'global']);
-  expect(found.map((row) => row.project)).toEqual(['bpp', 'global']);
+  expect(searchOne.mock.calls.map((call) => call[0])).toEqual(['acme', 'global']);
+  expect(found.map((row) => row.project)).toEqual(['acme', 'global']);
 });
 
 test('a global search does not open other clients', async () => {
@@ -75,7 +75,7 @@ test('a failed partition search does not drop the other', async () => {
   const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
   try {
     const found = await searchDecisionsAcrossProjects({
-      project: 'bpp',
+      project: 'acme',
       embedding: [1],
       searchOne,
     });
@@ -124,7 +124,7 @@ test('a complete scored item is kept and an incomplete one is dropped', () => {
 test('a distant hit does not overrule documents', () => {
   const close = scored(csv, DECISION_MAX_COSINE_DISTANCE);
   const distant = scored({ ...csv, decisionId: 'far', title: 'Unrelated' }, DECISION_MAX_COSINE_DISTANCE + 0.01);
-  expect(selectDecisions('bpp', [distant, close])).toEqual([csv]);
+  expect(selectDecisions('acme', [distant, close])).toEqual([csv]);
 });
 
 test('a project decision beats a newer global decision with the same title', () => {
@@ -138,7 +138,7 @@ test('a project decision beats a newer global decision with the same title', () 
     decisionId: 'global-csv',
     loggedAt: '2026-10-20T00:00:00.000Z',
   };
-  expect(selectDecisions('bpp', [scored(newerGlobal, 0.1), scored(olderProject, 0.1)])).toEqual([
+  expect(selectDecisions('acme', [scored(newerGlobal, 0.1), scored(olderProject, 0.1)])).toEqual([
     olderProject,
   ]);
 });
@@ -165,7 +165,7 @@ test('later loggedAt wins inside one project, then later cue timestamp', () => {
     loggedAt: '2026-10-15T00:00:00.000Z',
     timestamp: '00:00:50.000',
   };
-  expect(rankDecisions('bpp', [earlier, laterSameTime, laterCue]).map((row) => row.decisionId)).toEqual([
+  expect(rankDecisions('acme', [earlier, laterSameTime, laterCue]).map((row) => row.decisionId)).toEqual([
     'late-cue',
     'mid',
     'early',
