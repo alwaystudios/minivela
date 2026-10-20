@@ -55,8 +55,9 @@ test('the prompt keeps repo names on the map and follows ordinary Jira practice'
 test('a missing page stores one refusal and does not call the model', async () => {
   const { ready, put, complete } = draft({ readPage: async () => undefined });
   await expect(ready).resolves.toEqual({
-    response: 'Breakdown: bd-1\nStatus: refused\n\nNo object at acme/notes/billing.md.\n',
+    response: 'No object at acme/notes/billing.md.\n',
     status: 'refused',
+    breakdownId: 'bd-1',
   });
   expect(put).toHaveBeenCalledWith([
     expect.objectContaining({
@@ -175,17 +176,21 @@ test('a drafted epic and its stories are stored in ordinal order', async () => {
   const { ready, put } = draft({ retrieve });
   await expect(ready).resolves.toEqual({
     response: [
-      'Breakdown: bd-1',
-      'Status: tickets',
+      'Epic',
       '',
       '# Bill the new meter',
       '',
+      'Story',
+      '',
       '# Show the tariff',
+      '',
+      'Story',
       '',
       '# Record the reading',
       '',
     ].join('\n'),
     status: 'success',
+    breakdownId: 'bd-1',
   });
   expect(retrieve).toHaveBeenCalledWith({ prompt: 'Bill the new meter', project: 'acme' });
   expect(put).toHaveBeenCalledWith([
@@ -223,8 +228,9 @@ test('a page the model cannot split is stored as a refusal', async () => {
     complete: async () => ({ text: JSON.stringify({ reasons: 'The page is a status report.' }), cutOff: false }),
   });
   await expect(ready).resolves.toEqual({
-    response: 'Breakdown: bd-1\nStatus: refused\n\nThe page is a status report.\n',
+    response: 'The page is a status report.\n',
     status: 'refused',
+    breakdownId: 'bd-1',
   });
   expect(put).toHaveBeenCalledWith([
     expect.objectContaining({ kind: 'refusal', ordinal: 0, page, body: 'The page is a status report.' }),

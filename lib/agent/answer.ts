@@ -15,6 +15,7 @@ export type AnswerStatus = 'success' | 'error' | 'refused';
 export type AnswerResult = {
   response: string;
   status: AnswerStatus;
+  breakdownId?: string;
 };
 
 export type InvokeSkill = 'check-readiness' | 'draft-work-order' | 'draft-breakdown';

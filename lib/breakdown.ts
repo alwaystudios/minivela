@@ -38,14 +38,14 @@ export function breakdownQueryInput(
 }
 
 export function renderBreakdown(rows: BreakdownRow[]): string {
-  const breakdownId = rows[0]?.breakdownId ?? '';
   const refusal = rows.find((row) => row.kind === 'refusal');
   if (refusal && rows.length === 1) {
-    return document(breakdownId, 'refused', [refusal.body]);
+    return `${refusal.body.trim()}\n`;
   }
   const epic = rows.find((row) => row.kind === 'epic');
   const stories = rows.filter((row) => row.kind === 'story').sort((left, right) => left.ordinal - right.ordinal);
-  return document(breakdownId, 'tickets', [epic?.body ?? '', ...stories.map((row) => row.body)]);
+  const tickets = [labeled('Epic', epic?.body ?? ''), ...stories.map((story) => labeled('Story', story.body))];
+  return `${tickets.join('\n\n')}\n`;
 }
 
 export async function readBreakdown(input: {
@@ -74,11 +74,15 @@ export async function readBreakdown(input: {
     return { response: 'The stored breakdown could not be read.', status: 'error' };
   }
   const refused = rows.length === 1 && rows[0].kind === 'refusal';
-  return { response: renderBreakdown(rows), status: refused ? 'refused' : 'success' };
+  return {
+    response: renderBreakdown(rows),
+    status: refused ? 'refused' : 'success',
+    breakdownId: input.breakdownId,
+  };
 }
 
-function document(breakdownId: string, outcome: 'refused' | 'tickets', bodies: string[]): string {
-  return `Breakdown: ${breakdownId}\nStatus: ${outcome}\n\n${bodies.map((body) => body.trim()).join('\n\n')}\n`;
+function labeled(label: 'Epic' | 'Story', body: string): string {
+  return `${label}\n\n${body.trim()}`;
 }
 
 function classifyRow(item: unknown, project: string, breakdownId: string): BreakdownRow | 'other' | 'invalid' {

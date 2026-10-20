@@ -89,7 +89,11 @@ export async function draftBreakdown(input: {
         ];
   await input.put(rows);
   const refused = rows.length === 1 && rows[0].kind === 'refusal';
-  return { response: renderBreakdown(rows), status: refused ? 'refused' : 'success' };
+  return {
+    response: renderBreakdown(rows),
+    status: refused ? 'refused' : 'success',
+    breakdownId: input.breakdownId,
+  };
 }
 
 export const BREAKDOWN_SYSTEM_PROMPT =
@@ -122,7 +126,7 @@ async function storeRefusal(
 ): Promise<AnswerResult> {
   const rows = [row(input, 'refusal', 0, reason)];
   await input.put(rows);
-  return { response: renderBreakdown(rows), status: 'refused' };
+  return { response: renderBreakdown(rows), status: 'refused', breakdownId: input.breakdownId };
 }
 
 function row(
