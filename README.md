@@ -1,6 +1,6 @@
 # Minivela
 
-Minivela is the open-source, self-hosted baby brother of [Supervela](https://www.supervela.com). It keeps project memory and drafts a one-shot work-order prompt from a Jira ticket and the knowledge base: meeting decisions, notes, and handbooks.
+Minivela is the open-source, self-hosted baby brother of [Supervela](https://www.supervela.com). It keeps project memory, breaks one page into an epic and its stories, and drafts a one-shot work-order prompt from a Jira ticket and the knowledge base: meeting decisions, notes, and handbooks.
 
 ## Components
 
@@ -21,7 +21,7 @@ flowchart TB
   agent --> kb
   agent --> bedrock
   agent --> decisions
-  agent --> tables[(DynamoDB rules, repos, drafts)]
+  agent --> tables[(DynamoDB rules, repos, drafts, breakdowns, templates)]
   agent --> documents
 ```
 
