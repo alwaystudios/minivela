@@ -420,6 +420,14 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy repro steps, links, and named files from the source into the summary.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not invent how the change is made.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('If it names none, infer the target from the repo map.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A ticket with more than one step is one work order.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('An exclusion on the first step does not replace a later step that changes that same path.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Work that does not block the first step stays in the order when it is in scope or in acceptance.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Copy every acceptance line from the source into acceptance.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a risk that sets the order of the work into the summary.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('If two parts of the scope name different repos, name both as targets.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('When the source does not choose which path, add a premise with ifFalse stop.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not hedge a path.');
 });
 
 const storedDraft = {
