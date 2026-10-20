@@ -212,15 +212,8 @@ async function completeReadiness(query: {
   project: string;
   chunks: RetrievedChunk[];
   decisions: RetrievedDecision[];
-  rules: Rule[];
   repos: Repo[];
 }): Promise<string> {
-  const rulesContext =
-    query.rules.length === 0
-      ? '(no rules loaded)'
-      : query.rules
-          .map((rule, index) => `${index + 1}. rule ${rule.ruleId} project=${rule.project}\n${rule.title}\n${rule.body}`)
-          .join('\n\n');
   const reposContext =
     query.repos.length === 0
       ? '(no repos)'
@@ -257,7 +250,7 @@ async function completeReadiness(query: {
         messages: [
           {
             role: 'user',
-            content: `project: ${query.project}\nwork: ${query.prompt}\n\nrules:\n${rulesContext}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
+            content: `project: ${query.project}\nwork: ${query.prompt}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
           },
         ],
       }),
@@ -345,17 +338,10 @@ async function completeBreakdown(query: {
   pageText: string;
   chunks: RetrievedChunk[];
   decisions: RetrievedDecision[];
-  rules: Rule[];
   repos: Repo[];
   template?: string;
 }): Promise<{ text: string; cutOff: boolean }> {
   const templateContext = query.template ?? '(no template; follow ordinary Jira practice)';
-  const rulesContext =
-    query.rules.length === 0
-      ? '(no rules loaded)'
-      : query.rules
-          .map((rule, index) => `${index + 1}. rule ${rule.ruleId} project=${rule.project}\n${rule.title}\n${rule.body}`)
-          .join('\n\n');
   const reposContext = query.repos
     .map((repo, index) => `${index + 1}. ${repo.owner}/${repo.repo} url=${repo.url}\n${repo.summary}`)
     .join('\n\n');
@@ -384,7 +370,7 @@ async function completeBreakdown(query: {
         messages: [
           {
             role: 'user',
-            content: `project: ${query.project}\npage: ${query.page}\n\ntemplate:\n${templateContext}\n\npage text:\n${query.pageText}\n\nrules:\n${rulesContext}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
+            content: `project: ${query.project}\npage: ${query.page}\n\ntemplate:\n${templateContext}\n\npage text:\n${query.pageText}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
           },
         ],
       }),
@@ -503,7 +489,6 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
       readPage: readDocumentsObject,
       retrieve,
       searchDecisions: searchDecisionsStrict,
-      loadRules,
       loadRepos,
       loadTemplate: loadTicketTemplate,
       complete: completeBreakdown,
@@ -548,7 +533,6 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
           ticketDocument,
           retrieve,
           searchDecisions,
-          loadRules,
           loadRepos,
           complete: completeReadiness,
         })

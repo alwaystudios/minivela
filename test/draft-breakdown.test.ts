@@ -1,16 +1,9 @@
 import { BREAKDOWN_SYSTEM_PROMPT, breakdownSearchQuery, draftBreakdown } from '../lib/agent/draft-breakdown.js';
-import type { Repo, Rule } from '../lib/lookup.js';
+import type { Repo } from '../lib/lookup.js';
 
 const createdAt = '2026-10-20T18:00:00.000Z';
 const page = 'acme/notes/billing.md';
 const pageText = '# Bill the new meter\n\nShow the tariff, then record the reading.\n';
-
-const rule: Rule = {
-  project: 'global',
-  ruleId: 'small-tickets',
-  title: 'Keep tickets small',
-  body: 'One outcome per story.',
-};
 
 const repo: Repo = {
   project: 'acme',
@@ -36,7 +29,6 @@ function draft(input: Partial<Parameters<typeof draftBreakdown>[0]> = {}) {
     readPage: async () => pageText,
     retrieve: async () => [],
     searchDecisions: async () => [],
-    loadRules: async () => [rule],
     loadRepos: async () => [repo],
     loadTemplate: async () => undefined,
     complete,
@@ -56,6 +48,8 @@ test('the prompt keeps repo names on the map and follows ordinary Jira practice'
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('Each ticket says the repo was not opened.');
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('follow ordinary Jira practice');
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('There is no story-count cap.');
+  expect(BREAKDOWN_SYSTEM_PROMPT).not.toContain('Rules apply');
+  expect(BREAKDOWN_SYSTEM_PROMPT).not.toContain('the rules');
 });
 
 test('a missing page stores one refusal and does not call the model', async () => {
@@ -81,17 +75,6 @@ test('an empty page stores one refusal and does not call the model', async () =>
     response: expect.stringContaining('The page is empty.'),
     status: 'refused',
   });
-  expect(complete).not.toHaveBeenCalled();
-});
-
-test('a failed rules query stores one refusal and does not call the model', async () => {
-  const { ready, put, complete } = draft({
-    loadRules: async () => {
-      throw new Error('query failed');
-    },
-  });
-  await expect(ready).resolves.toMatchObject({ status: 'refused' });
-  expect(put).toHaveBeenCalledWith([expect.objectContaining({ kind: 'refusal', body: 'Rules failed to load.' })]);
   expect(complete).not.toHaveBeenCalled();
 });
 

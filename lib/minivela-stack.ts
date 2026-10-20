@@ -379,7 +379,7 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'RulesTableName', {
       value: rules.tableName,
-      description: 'Hard rules. Query global on every skill. Each item is ruleId, title, body. No vectors.',
+      description: 'Hard rules. Query global when drafting a work order. Each item is ruleId, title, body. No vectors.',
     });
     new cdk.CfnOutput(this, 'TemplatesTableName', {
       value: templates.tableName,

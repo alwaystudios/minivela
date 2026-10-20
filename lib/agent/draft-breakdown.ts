@@ -1,5 +1,5 @@
 import type { RetrievedDecision } from '../search-decisions.js';
-import type { Repo, Rule } from '../lookup.js';
+import type { Repo } from '../lookup.js';
 import { breakdownTicketId, renderBreakdown, type BreakdownRow } from '../breakdown.js';
 import type { AnswerResult, RetrievedChunk } from './answer.js';
 
@@ -16,7 +16,6 @@ export async function draftBreakdown(input: {
   readPage: (key: string) => Promise<string | undefined>;
   retrieve: (query: { prompt: string; project: string }) => Promise<RetrievedChunk[]>;
   searchDecisions: (query: { prompt: string; project: string }) => Promise<RetrievedDecision[]>;
-  loadRules: (project: string) => Promise<Rule[]>;
   loadRepos: (project: string) => Promise<Repo[]>;
   loadTemplate: (project: string) => Promise<string | undefined>;
   complete: (query: {
@@ -25,7 +24,6 @@ export async function draftBreakdown(input: {
     pageText: string;
     chunks: RetrievedChunk[];
     decisions: RetrievedDecision[];
-    rules: Rule[];
     repos: Repo[];
     template?: string;
   }) => Promise<{ text: string; cutOff: boolean }>;
@@ -41,17 +39,12 @@ export async function draftBreakdown(input: {
     return storeRefusal(input, 'The page is empty.');
   }
   const searchQuery = breakdownSearchQuery(raw);
-  const [rulesResult, reposResult, decisionsResult, chunksResult, templateResult] = await Promise.all([
-    settle(input.loadRules(input.project)),
+  const [reposResult, decisionsResult, chunksResult, templateResult] = await Promise.all([
     settle(input.loadRepos(input.project)),
     settle(input.searchDecisions({ prompt: searchQuery, project: input.project })),
     settle(input.retrieve({ prompt: searchQuery, project: input.project })),
     settle(loadTemplate(input)),
   ]);
-  if (rulesResult.status === 'rejected') {
-    console.error(rulesResult.reason);
-    return storeRefusal(input, 'Rules failed to load.');
-  }
   if (reposResult.status === 'rejected') {
     console.error(reposResult.reason);
     return storeRefusal(input, 'The repo map failed to load.');
@@ -77,7 +70,6 @@ export async function draftBreakdown(input: {
     pageText: raw,
     chunks: chunksResult.value.filter((chunk) => !chunkIsPage(chunk.uri, input.page)),
     decisions: decisionsResult.value,
-    rules: rulesResult.value,
     repos: reposResult.value,
     ...(template ? { template } : {}),
   });
@@ -101,7 +93,7 @@ export async function draftBreakdown(input: {
 }
 
 export const BREAKDOWN_SYSTEM_PROMPT =
-  'You draft a Jira epic and its stories from one page. Return JSON only, not the combined document. If you can split the page, return {"epic":"","stories":[""]}. Each value is one ticket in markdown and starts with a heading. stories may be empty. There is no story-count cap. If you can read the page but cannot split it, return {"reasons":"why"}. That is a finished refusal. Use only the page, the template, the rules, the decisions, the other documents, and the repos provided. A knowledge-base chunk of this same page is not the page. Decisions overrule the page. Project decisions beat global decisions. Rules apply. Repo names come from the repo map only. Do not invent a repo. A module path in a story is a claim taken from the page, a decision, or a repo summary. Each ticket says the repo was not opened. Do not open a repo. When a template is provided, fill that one template for the epic and for every story. The body is the filled ticket. When no template is provided, follow ordinary Jira practice. Do not invent a template.';
+  'You draft a Jira epic and its stories from one page. Return JSON only, not the combined document. If you can split the page, return {"epic":"","stories":[""]}. Each value is one ticket in markdown and starts with a heading. stories may be empty. There is no story-count cap. If you can read the page but cannot split it, return {"reasons":"why"}. That is a finished refusal. Use only the page, the template, the decisions, the other documents, and the repos provided. A knowledge-base chunk of this same page is not the page. Decisions overrule the page. Project decisions beat global decisions. Repo names come from the repo map only. Do not invent a repo. A module path in a story is a claim taken from the page, a decision, or a repo summary. Each ticket says the repo was not opened. Do not open a repo. When a template is provided, fill that one template for the epic and for every story. The body is the filled ticket. When no template is provided, follow ordinary Jira practice. Do not invent a template.';
 
 async function loadTemplate(input: {
   project: string;

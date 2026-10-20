@@ -296,17 +296,9 @@ test('a failed decision search still answers from documents', async () => {
   }
 });
 
-test('check-readiness loads rules, repos, decisions, and documents', async () => {
+test('check-readiness loads repos, decisions, and documents', async () => {
   const retrieve = jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]);
   const searchDecisions = jest.fn().mockResolvedValue([]);
-  const loadRules = jest.fn().mockResolvedValue([
-    {
-      project: 'global',
-      ruleId: 'small-diffs',
-      title: 'Small diffs. No drive-by refactors.',
-      body: 'Prefer small, reviewable diffs.',
-    },
-  ]);
   const loadRepos = jest.fn().mockResolvedValue([
     {
       project: 'acme',
@@ -323,20 +315,18 @@ test('check-readiness loads rules, repos, decisions, and documents', async () =>
     project: 'acme',
     retrieve,
     searchDecisions,
-    loadRules,
     loadRepos,
     complete,
   });
-  expect(loadRules).toHaveBeenCalledWith('acme');
   expect(loadRepos).toHaveBeenCalledWith('acme');
   expect(complete).toHaveBeenCalledWith(
     expect.objectContaining({
       prompt: 'add CSV export',
       project: 'acme',
-      rules: [expect.objectContaining({ ruleId: 'small-diffs' })],
       repos: [expect.objectContaining({ repoId: 'acme/web' })],
     }),
   );
+  expect(complete.mock.calls[0][0]).not.toHaveProperty('rules');
   expect(result.status).toBe('success');
 });
 
