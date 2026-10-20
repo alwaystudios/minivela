@@ -38,11 +38,11 @@ export function renderBreakdown(rows: BreakdownRow[]): string {
   const breakdownId = rows[0]?.breakdownId ?? '';
   const refusal = rows.find((row) => row.kind === 'refusal');
   if (refusal && rows.length === 1) {
-    return document(breakdownId, [refusal.body]);
+    return document(breakdownId, 'refused', [refusal.body]);
   }
   const epic = rows.find((row) => row.kind === 'epic');
   const stories = rows.filter((row) => row.kind === 'story').sort((left, right) => left.ordinal - right.ordinal);
-  return document(breakdownId, [epic?.body ?? '', ...stories.map((row) => row.body)]);
+  return document(breakdownId, 'tickets', [epic?.body ?? '', ...stories.map((row) => row.body)]);
 }
 
 export async function readBreakdown(input: {
@@ -70,11 +70,12 @@ export async function readBreakdown(input: {
   if (!isRenderable(rows)) {
     return { response: 'The stored breakdown could not be read.', status: 'error' };
   }
-  return { response: renderBreakdown(rows), status: 'success' };
+  const refused = rows.length === 1 && rows[0].kind === 'refusal';
+  return { response: renderBreakdown(rows), status: refused ? 'refused' : 'success' };
 }
 
-function document(breakdownId: string, bodies: string[]): string {
-  return `Breakdown: ${breakdownId}\n\n${bodies.map((body) => body.trim()).join('\n\n')}\n`;
+function document(breakdownId: string, outcome: 'refused' | 'tickets', bodies: string[]): string {
+  return `Breakdown: ${breakdownId}\nStatus: ${outcome}\n\n${bodies.map((body) => body.trim()).join('\n\n')}\n`;
 }
 
 function classifyRow(item: unknown, project: string, breakdownId: string): BreakdownRow | 'other' | 'invalid' {

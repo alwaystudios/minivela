@@ -41,8 +41,8 @@ test('a refusal renders its body under the breakdown id', async () => {
     query: async () => stored,
   });
   expect(result).toEqual({
-    response: 'Breakdown: bd-r\n\nThe page is empty.\n',
-    status: 'success',
+    response: 'Breakdown: bd-r\nStatus: refused\n\nThe page is empty.\n',
+    status: 'refused',
   });
 });
 
@@ -63,7 +63,7 @@ test('an epic is followed by its stories in ordinal order', async () => {
     },
   });
   expect(result).toEqual({
-    response: ['Breakdown: bd-1', '', '# Bill the new meter', '', '# Show the tariff', '', '# Record the reading', ''].join(
+    response: ['Breakdown: bd-1', 'Status: tickets', '', '# Bill the new meter', '', '# Show the tariff', '', '# Record the reading', ''].join(
       '\n',
     ),
     status: 'success',

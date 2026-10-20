@@ -10,7 +10,7 @@ export type RetrievedChunk = {
   uri?: string;
 };
 
-export type AnswerStatus = 'success' | 'error';
+export type AnswerStatus = 'success' | 'error' | 'refused';
 
 export type AnswerResult = {
   response: string;
