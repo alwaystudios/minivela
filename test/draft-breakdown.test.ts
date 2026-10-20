@@ -248,6 +248,19 @@ test('a cut-off reply writes no rows', async () => {
   expect(put).not.toHaveBeenCalled();
 });
 
+test('a literal copy of the split example is stored', async () => {
+  const example = '{"epic":"# Epic","stories":["# Story"]}';
+  expect(BREAKDOWN_SYSTEM_PROMPT).toContain(`return ${example}`);
+  const { ready, put } = draft({
+    complete: async () => ({ text: example, cutOff: false }),
+  });
+  await expect(ready).resolves.toMatchObject({ status: 'success', breakdownId: 'bd-1' });
+  expect(put).toHaveBeenCalledWith([
+    expect.objectContaining({ kind: 'epic', ordinal: 0, body: '# Epic' }),
+    expect.objectContaining({ kind: 'story', ordinal: 1, body: '# Story' }),
+  ]);
+});
+
 test('a reply that does not parse writes no rows', async () => {
   const { ready, put } = draft({
     complete: async () => ({ text: 'not json', cutOff: false }),
