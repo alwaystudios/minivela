@@ -28,7 +28,9 @@ The documents bucket is the knowledge base data source. Put markdown there, with
 
 Deploy prints `AgentRuntimeArn`. That is the human interface. Pass `project` on every invoke. Pass `prompt` to retrieve that client plus `global`, and to search transcript decisions the same way. Pass `ticket` to read `<project>/jira/<ticket>.md` from the documents bucket and use that whole file. When `prompt` is omitted, that file is the prompt, including for decision search. A missing object is an error. The agent does not search the knowledge base for the key. Close decisions overrule documents. A documents question still works if search finds nothing. It will not search without a project.
 
-Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. Both paths load global rules and that client's repo map. Omit `skill` for a normal question. The draft names repos from that map only. DynamoDB always stores that draft as JSON. The stored draft copies the rules loaded for that call, global first, and this precedence line: "Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent, or a different value in the repo for a fact this order names, is a failed premise. Do not invent a replacement or copy the repo. A count, metric, log backend, or filename with no outcome means stop and ask. An acceptance line that needs a running environment, credentials, a third-party page, or production data is human-verified, even when the line does not say so. A test that runs in the checkout stays for the agent. Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints." The markdown places that line with the repos and again under Global rules. A premise is a verify-before-building line. An acceptance line the agent cannot check ends with "human-verified, not agent-verified". A failed rules query stores nothing. The command writes a JSON file, and the draft is the `response` string inside it. Omit `format` for that stored JSON. Set `format` to `markdown` for the same draft as an agent prompt. Pass `draftId` with `project` to fetch a stored draft. Omit `prompt`, `skill`, and `ticket` on a fetch. A fetch does not write a row.
+Set `skill` to `check-readiness` to get a ready-or-blocked verdict. Set it to `draft-work-order` to store a work-order draft in DynamoDB. check-readiness loads that client's repo map. draft-work-order loads global rules and that client's repo map. Rules apply only on a work order. An empty repo map, or a repo map that fails to load, stops check-readiness and draft-work-order before the model runs, and a work order stores nothing. draft-breakdown stores that same stop as a refusal. Omit `skill` for a normal question. The draft names repos from that map only. DynamoDB always stores that draft as JSON. The stored draft copies the rules loaded for that call, global first, and this precedence line: "Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent, or a different value in the repo for a fact this order names, is a failed premise. Do not invent a replacement or copy the repo. A count, metric, log backend, or filename with no outcome means stop and ask. An acceptance line that needs a running environment, credentials, a third-party page, or production data is human-verified, even when the line does not say so. A test that runs in the checkout stays for the agent. Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints." The markdown places that line with the repos and again under Global rules. A premise is a verify-before-building line. An acceptance line the agent cannot check ends with "human-verified, not agent-verified". A failed rules query stores nothing. The command writes a JSON file, and the draft is the `response` string inside it. Omit `format` for that stored JSON. Set `format` to `markdown` for the same draft as an agent prompt. Pass `draftId` with `project` to fetch a stored draft. Omit `prompt`, `skill`, `page`, and `ticket` on a fetch. A fetch does not write a row.
+
+Set `skill` to `draft-breakdown` and pass `page`. `page` is the documents-bucket key. It starts with `<project>/`, ends with `.md`, and contains no `..`. The skill reads that object whole. Decision and document search use the first heading, or the first line when the page has none. The whole page is what gets split. A failed search stores nothing. It stores an epic and its stories, or one refusal, and the response is that document. Each ticket is labeled Epic or Story. The breakdown id is the `breakdownId` field on the JSON, not inside the document. The epic row records the page key. A refusal row records it too. A story row does not, and the key is not in the response. Omit `prompt`, `ticket`, `draftId`, `breakdownId`, and `format`. Pass `breakdownId` with `project` to fetch the same document. Omit `prompt`, `skill`, `page`, `ticket`, `draftId`, and `format` on that fetch. A ticket template is one DynamoDB row, sort key `ticket`. The project row replaces `global`. When neither row exists, the prompt tells the model to follow ordinary Jira practice. The generated tickets stay out of the documents bucket.
 
 Prove decision search with a `.vtt` at `<project>/transcripts/<meeting>.vtt`, then ask about that meeting. `test/fixtures/csv-export.vtt` is one such file.
 
@@ -110,6 +112,32 @@ aws bedrock-agentcore invoke-agent-runtime \
   outfile.json
 ```
 
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <agent-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"project":"acme","page":"acme/notes/billing.md","skill":"draft-breakdown"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  --cli-binary-format raw-in-base64-out \
+  outfile.json
+```
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <agent-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"project":"acme","breakdownId":"<breakdown-id>"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  --cli-binary-format raw-in-base64-out \
+  outfile.json
+```
+
 Deploy prints `KnowledgeBaseId`. Direct retrieve is for debugging the index. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
 
 ```bash
@@ -133,7 +161,7 @@ aws dynamodb query \
   --region us-east-1
 ```
 
-Deploy prints `RulesTableName`. Hard rules are DynamoDB, queried by project. Load `global` on every skill. They are not a knowledge base data source and have no vectors. `project` is a reserved word, so the query aliases it.
+Deploy prints `RulesTableName`. Hard rules are DynamoDB, queried by project. Load `global` when drafting a work order. They are not a knowledge base data source and have no vectors. `project` is a reserved word, so the query aliases it.
 
 ```bash
 aws dynamodb query \
@@ -141,6 +169,16 @@ aws dynamodb query \
   --key-condition-expression '#p = :p' \
   --expression-attribute-names '{"#p":"project"}' \
   --expression-attribute-values '{":p":{"S":"global"}}' \
+  --profile my-profile \
+  --region us-east-1
+```
+
+Deploy prints `TemplatesTableName`. The ticket template is DynamoDB, one row per project. The sort key is `templateId` and the only id is `ticket`. `body` is the template. It is not a knowledge base data source.
+
+```bash
+aws dynamodb get-item \
+  --table-name <templates-table-name> \
+  --key '{"project":{"S":"acme"},"templateId":{"S":"ticket"}}' \
   --profile my-profile \
   --region us-east-1
 ```

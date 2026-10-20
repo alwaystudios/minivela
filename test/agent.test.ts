@@ -114,7 +114,7 @@ test('a fetch rejects a prompt or a skill', () => {
       draftId: 'draft-1',
     }),
   ).toEqual({
-    response: 'draftId fetches a stored draft. Omit prompt, skill, and ticket.',
+    response: 'draftId fetches a stored draft. Omit prompt, skill, page, and ticket.',
     status: 'error',
   });
 });
@@ -179,7 +179,48 @@ test('a ticket read returns the whole markdown object', async () => {
 
 test('an unknown skill is rejected', () => {
   expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft' })).toEqual({
-    response: 'skill must be check-readiness or draft-work-order when set.',
+    response: 'skill must be check-readiness, draft-work-order, or draft-breakdown when set.',
+    status: 'error',
+  });
+});
+
+test('draft-breakdown reads one page in the project', () => {
+  expect(
+    parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.md', skill: 'draft-breakdown' }),
+  ).toEqual({
+    project: 'acme',
+    skill: 'draft-breakdown',
+    page: 'acme/notes/billing.md',
+  });
+  expect(parseInvokePayload({ project: 'acme', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'other/notes/billing.md', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/../notes/billing.md', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.txt', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(
+    parseInvokePayload({
+      project: 'acme',
+      page: 'acme/notes/billing.md',
+      skill: 'draft-breakdown',
+      prompt: 'split this',
+    }),
+  ).toEqual({
+    response: 'draft-breakdown reads one page. Omit prompt, ticket, draftId, breakdownId, and format.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.md', prompt: 'split this' })).toEqual({
+    response: 'page is only valid with skill draft-breakdown.',
     status: 'error',
   });
 });
@@ -255,17 +296,9 @@ test('a failed decision search still answers from documents', async () => {
   }
 });
 
-test('check-readiness loads rules, repos, decisions, and documents', async () => {
+test('check-readiness loads repos, decisions, and documents', async () => {
   const retrieve = jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]);
   const searchDecisions = jest.fn().mockResolvedValue([]);
-  const loadRules = jest.fn().mockResolvedValue([
-    {
-      project: 'global',
-      ruleId: 'small-diffs',
-      title: 'Small diffs. No drive-by refactors.',
-      body: 'Prefer small, reviewable diffs.',
-    },
-  ]);
   const loadRepos = jest.fn().mockResolvedValue([
     {
       project: 'acme',
@@ -282,21 +315,52 @@ test('check-readiness loads rules, repos, decisions, and documents', async () =>
     project: 'acme',
     retrieve,
     searchDecisions,
-    loadRules,
     loadRepos,
     complete,
   });
-  expect(loadRules).toHaveBeenCalledWith('acme');
   expect(loadRepos).toHaveBeenCalledWith('acme');
   expect(complete).toHaveBeenCalledWith(
     expect.objectContaining({
       prompt: 'add CSV export',
       project: 'acme',
-      rules: [expect.objectContaining({ ruleId: 'small-diffs' })],
       repos: [expect.objectContaining({ repoId: 'acme/web' })],
     }),
   );
+  expect(complete.mock.calls[0][0]).not.toHaveProperty('rules');
   expect(result.status).toBe('success');
+});
+
+test('check-readiness stops when the repo map is empty', async () => {
+  const complete = jest.fn();
+  const result = await checkReadiness({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([]),
+    complete,
+  });
+  expect(complete).not.toHaveBeenCalled();
+  expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+});
+
+test('check-readiness stops when the repo map fails to load', async () => {
+  const complete = jest.fn();
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await checkReadiness({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
+      complete,
+    });
+    expect(complete).not.toHaveBeenCalled();
+    expect(result).toEqual({ response: 'The repo map failed to load.', status: 'refused' });
+  } finally {
+    error.mockRestore();
+  }
 });
 
 const webRepo = {
@@ -644,6 +708,51 @@ test('draft-work-order does not store a repo that is not in the map', async () =
   });
 });
 
+test('draft-work-order stops when the repo map is empty', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const complete = jest.fn();
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([]),
+    complete,
+    put,
+    draftId: 'draft-empty-map',
+    createdAt: '2026-10-15T21:00:00.000Z',
+  });
+  expect(complete).not.toHaveBeenCalled();
+  expect(put).not.toHaveBeenCalled();
+  expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+});
+
+test('draft-work-order stops when the repo map fails to load', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const complete = jest.fn();
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await draftWorkOrder({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRules: jest.fn().mockResolvedValue([]),
+      loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
+      complete,
+      put,
+      draftId: 'draft-map-failed',
+      createdAt: '2026-10-15T21:00:00.000Z',
+    });
+    expect(complete).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(result).toEqual({ response: 'The repo map failed to load.', status: 'refused' });
+  } finally {
+    error.mockRestore();
+  }
+});
+
 test('draft-work-order does not store when the model is blocked', async () => {
   const put = jest.fn().mockResolvedValue(undefined);
   const result = await draftWorkOrder({
@@ -652,7 +761,7 @@ test('draft-work-order does not store when the model is blocked', async () => {
     retrieve: jest.fn().mockResolvedValue([]),
     searchDecisions: jest.fn().mockResolvedValue([]),
     loadRules: jest.fn().mockResolvedValue([]),
-    loadRepos: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(JSON.stringify({ blocked: 'No target repo exists.' })),
     put,
     draftId: 'draft-3',

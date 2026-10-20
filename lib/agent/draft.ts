@@ -38,21 +38,31 @@ export async function draftWorkOrder(input: {
     return [];
   });
   const rulesPromise = input.loadRules(input.project);
-  const reposPromise = input.loadRepos(input.project).catch((error) => {
-    console.error(error);
-    return [];
-  });
-  const [chunks, decisions, repos] = await Promise.all([
+  const reposPromise = input.loadRepos(input.project);
+  const [chunks, decisions, rulesOutcome, reposOutcome] = await Promise.all([
     chunksPromise,
     decisionsPromise,
-    reposPromise,
+    rulesPromise.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
+    reposPromise.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
   ]);
-  let rules: Rule[];
-  try {
-    rules = await rulesPromise;
-  } catch (error) {
-    console.error(error);
+  if (!rulesOutcome.ok) {
+    console.error(rulesOutcome.error);
     return { response: 'Rules failed to load.', status: 'success' };
+  }
+  if (!reposOutcome.ok) {
+    console.error(reposOutcome.error);
+    return { response: 'The repo map failed to load.', status: 'refused' };
+  }
+  const rules = rulesOutcome.value;
+  const repos = reposOutcome.value;
+  if (repos.length === 0) {
+    return { response: 'The repo map is empty.', status: 'refused' };
   }
   const text = await input.complete({
     prompt: input.prompt,

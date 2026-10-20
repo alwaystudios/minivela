@@ -1,6 +1,6 @@
 import { projectRetrieveFilter } from '../project-filter.js';
 import type { RetrievedDecision } from '../search-decisions.js';
-import { isTicketKey } from '../ticket.js';
+import { isDocumentsPageKey, isTicketKey } from '../ticket.js';
 import type { DraftResponseFormat } from '../work-order.js';
 
 export type { RetrievedDecision };
@@ -15,14 +15,16 @@ export type AnswerStatus = 'success' | 'error' | 'refused';
 export type AnswerResult = {
   response: string;
   status: AnswerStatus;
+  breakdownId?: string;
 };
 
-export type InvokeSkill = 'check-readiness' | 'draft-work-order';
+export type InvokeSkill = 'check-readiness' | 'draft-work-order' | 'draft-breakdown';
 
 export function parseInvokePayload(
   raw: unknown,
 ):
-  | { project: string; prompt?: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
+  | { project: string; prompt?: string; skill?: Exclude<InvokeSkill, 'draft-breakdown'>; format?: DraftResponseFormat; ticket?: string }
+  | { project: string; skill: 'draft-breakdown'; page: string }
   | { project: string; draftId: string; format?: DraftResponseFormat }
   | { project: string; breakdownId: string }
   | AnswerResult {
@@ -67,23 +69,53 @@ export function parseInvokePayload(
   }
   if (draftId) {
     return (
-      rejectIfSet('draftId fetches a stored draft. Omit prompt, skill, and ticket.', [prompt, body.skill, ticket]) ?? {
+      rejectIfSet('draftId fetches a stored draft. Omit prompt, skill, page, and ticket.', [
+        prompt,
+        body.skill,
+        body.page,
+        ticket,
+      ]) ?? {
         project,
         draftId,
         ...(format ? { format } : {}),
       }
     );
   }
-  if (!prompt && !ticket) {
-    return { response: 'Ask a question in prompt, or name a ticket.', status: 'error' };
+  if (body.page !== undefined && body.page !== '' && typeof body.page !== 'string') {
+    return { response: 'Name a page.', status: 'error' };
   }
+  const page = typeof body.page === 'string' ? body.page.trim() : '';
   if (
     body.skill !== undefined &&
     body.skill !== '' &&
     body.skill !== 'check-readiness' &&
-    body.skill !== 'draft-work-order'
+    body.skill !== 'draft-work-order' &&
+    body.skill !== 'draft-breakdown'
   ) {
-    return { response: 'skill must be check-readiness or draft-work-order when set.', status: 'error' };
+    return { response: 'skill must be check-readiness, draft-work-order, or draft-breakdown when set.', status: 'error' };
+  }
+  if (body.skill === 'draft-breakdown' || page) {
+    if (body.skill !== 'draft-breakdown') {
+      return { response: 'page is only valid with skill draft-breakdown.', status: 'error' };
+    }
+    if (!page) {
+      return { response: 'Name a page.', status: 'error' };
+    }
+    if (!isDocumentsPageKey(project, page)) {
+      return { response: 'Name a page in this project.', status: 'error' };
+    }
+    return (
+      rejectIfSet('draft-breakdown reads one page. Omit prompt, ticket, draftId, breakdownId, and format.', [
+        prompt,
+        ticket,
+        draftId,
+        breakdownId,
+        format,
+      ]) ?? { project, skill: 'draft-breakdown', page }
+    );
+  }
+  if (!prompt && !ticket) {
+    return { response: 'Ask a question in prompt, or name a ticket.', status: 'error' };
   }
   const skill = body.skill === 'check-readiness' || body.skill === 'draft-work-order' ? body.skill : undefined;
   if (format === undefined) {

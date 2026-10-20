@@ -49,6 +49,13 @@ export class MinivelaStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const templates = new dynamodb.Table(this, 'Templates', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'templateId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const drafts = new dynamodb.Table(this, 'Drafts', {
       partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'draftId', type: dynamodb.AttributeType.STRING },
@@ -289,6 +296,7 @@ export class MinivelaStack extends cdk.Stack {
         REPOS_TABLE_NAME: repos.tableName,
         DRAFTS_TABLE_NAME: drafts.tableName,
         BREAKDOWNS_TABLE_NAME: breakdowns.tableName,
+        TEMPLATES_TABLE_NAME: templates.tableName,
         DOCUMENTS_BUCKET_NAME: documents.bucketName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
@@ -332,7 +340,7 @@ export class MinivelaStack extends cdk.Stack {
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:GetItem'],
-        resources: [decisions.tableArn, drafts.tableArn, breakdowns.tableArn],
+        resources: [decisions.tableArn, drafts.tableArn, breakdowns.tableArn, templates.tableArn],
       }),
     );
     agent.role.addToPrincipalPolicy(
@@ -371,7 +379,12 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'RulesTableName', {
       value: rules.tableName,
-      description: 'Hard rules. Query global on every skill. Each item is ruleId, title, body. No vectors.',
+      description: 'Hard rules. Query global when drafting a work order. Each item is ruleId, title, body. No vectors.',
+    });
+    new cdk.CfnOutput(this, 'TemplatesTableName', {
+      value: templates.tableName,
+      description:
+        'Ticket template. Partition project, sort templateId, and the only id is ticket. body is the template. The project row replaces global. No row means ordinary Jira practice.',
     });
     new cdk.CfnOutput(this, 'DraftsTableName', {
       value: drafts.tableName,
@@ -380,7 +393,7 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'BreakdownsTableName', {
       value: breakdowns.tableName,
       description:
-        'Page breakdowns. Partition project, sort ticketId as <breakdownId>#<ordinal>. Each item is breakdownId, kind, ordinal, body, createdAt. A fetch renders one breakdown.',
+        'Page breakdowns. Partition project, sort ticketId as <breakdownId>#<ordinal>. Each item is breakdownId, kind, ordinal, body, createdAt. The epic records the source page. A refusal records it too. A story does not. A fetch renders one breakdown.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,
