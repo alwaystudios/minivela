@@ -143,6 +143,8 @@ Add CSV export in acme/web.
 - acme/web (src/export)
 - acme/api
 
+${RULE_PRECEDENCE}
+
 ## Constraints
 
 - Match existing patterns in acme/web.
@@ -291,6 +293,83 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
   expect(markdown).toContain('quote: Excel is out of scope.');
   expect(markdown).toContain('speaker: Alex');
   expect(markdown).toContain('loggedAt: 2026-10-16T07:00:00.000Z');
+});
+
+test('a rule consequence stays next to the files and a premise says what a miss means', () => {
+  const consequence = 'No comment mentions New Relic, history, or a ticket.';
+  const parsed = parseDraftModelText(
+    JSON.stringify({
+      intent: 'Add CSV export',
+      summary: 'Add CSV export in acme/web. Do not mention a ticket, New Relic, or history in a comment.',
+      repos: [{ owner: 'acme', repo: 'web', paths: ['src/export'] }],
+      constraints: ['Only change the export path.', 'Do not mention a ticket, New Relic, or history in a comment.'],
+      acceptance: ['Query path covered by a test.', 'The export page offers CSV. human-verified, not agent-verified'],
+      consequences: [consequence],
+      premises: [
+        { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
+        { claim: 'A pool metric exists.', ifFalse: 'omit' },
+        { claim: 'Skipped', ifFalse: 'ask' },
+      ],
+    }),
+    {
+      project: 'acme',
+      prompt: 'Add CSV export in acme/web.',
+      repos: [web],
+      decisions: [],
+      chunks: [],
+      rules: [
+        {
+          project: 'global',
+          ruleId: 'comment-contents',
+          title: 'Comments stay free of tickets and vendors',
+          body: 'Do not mention a ticket, New Relic, or history in a comment.',
+        },
+      ],
+    },
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    return;
+  }
+  expect(parsed.workOrder.summary).toBe('Add CSV export in acme/web.');
+  expect(parsed.workOrder.constraints).toEqual(['Only change the export path.']);
+  expect(parsed.workOrder.consequences).toEqual([consequence]);
+  expect(parsed.workOrder.acceptance).toEqual([
+    'Query path covered by a test.',
+    'The export page offers CSV. human-verified, not agent-verified',
+  ]);
+  expect(parsed.workOrder.premises).toEqual([
+    { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
+    { claim: 'A pool metric exists.', ifFalse: 'omit' },
+  ]);
+  const markdown = formatDraftMarkdown({
+    project: 'acme',
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+    workOrder: parsed.workOrder,
+    citations: { decisionIds: [], documentUris: [] },
+  });
+  expect(markdown).toContain('In the files this change writes:');
+  expect(markdown).toContain(`- ${consequence}`);
+  expect(markdown.match(/No comment mentions New Relic, history, or a ticket\./g)).toHaveLength(2);
+  expect(markdown.match(/Do not mention a ticket, New Relic, or history in a comment\./g)).toHaveLength(1);
+  expect(markdown).not.toContain('- Do not mention a ticket, New Relic, or history in a comment.');
+  expect(markdown).toContain('## Verify before building');
+  expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
+  expect(markdown).toContain('- A pool metric exists. If this is false, omit it and say so in the pull request.');
+  expect(markdown).not.toContain('Skipped');
+  expect(markdown).toContain('- Query path covered by a test.');
+  expect(markdown).toContain('- The export page offers CSV. human-verified, not agent-verified');
+  expect(markdown).not.toMatch(/Query path covered by a test\..*human-verified/);
+  expect(markdown.match(/^## .+$/gm)).toEqual([
+    '## Intent',
+    '## Summary',
+    '## Repos',
+    '## Verify before building',
+    '## Constraints',
+    '## Acceptance',
+    '## Global rules',
+  ]);
 });
 
 test('a draft with no citations omits that section', () => {

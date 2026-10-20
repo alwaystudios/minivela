@@ -411,6 +411,11 @@ test('draft-work-order can return the stored draft as markdown', async () => {
 
 test('the draft prompt keeps source facts and leaves rules out of the draft', () => {
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule in the summary, the acceptance, or the constraints, including a paraphrase.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A consequence of a loaded rule goes in consequences');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('If the source names a file this repo has no home for, name the module README, or the pull request body when no module is named.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('ifFalse is stop when that claim is the point of the work, and omit when the rest can proceed without it.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('human-verified, not agent-verified');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A test that runs in the checkout stays unmarked.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy repro steps, links, and named files from the source into the summary.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not invent how the change is made.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('If it names none, infer the target from the repo map.');
@@ -472,6 +477,42 @@ test('read by id can return markdown for that row', async () => {
   expect(result.response).toContain('Draft: draft-1');
   expect(result.response).toContain('quote: Excel is out of scope.');
   expect(result.response).not.toContain('"workOrder"');
+});
+
+test('read by id keeps consequences and premises', async () => {
+  const result = await readWorkOrder({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    format: 'markdown',
+    get: jest.fn().mockResolvedValue({
+      ...storedDraft,
+      workOrder: {
+        ...storedDraft.workOrder,
+        consequences: ['No comment mentions New Relic, history, or a ticket.'],
+        premises: [{ claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' }],
+      },
+    }),
+    loadDecisions: jest.fn().mockResolvedValue([]),
+  });
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('In the files this change writes:');
+  expect(result.response).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
+});
+
+test('read by id rejects a premise with no outcome', async () => {
+  const result = await readWorkOrder({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    get: jest.fn().mockResolvedValue({
+      ...storedDraft,
+      workOrder: {
+        ...storedDraft.workOrder,
+        premises: [{ claim: 'Eight monitors expose both thresholds', ifFalse: 'ask' }],
+      },
+    }),
+    loadDecisions: jest.fn(),
+  });
+  expect(result).toEqual({ response: 'The stored draft could not be read.', status: 'error' });
 });
 
 test('read by id misses a draft that is not stored', async () => {

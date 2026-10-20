@@ -8,7 +8,14 @@ export type WorkOrderRepo = {
 };
 
 export const RULE_PRECEDENCE =
-  'Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints.';
+  'Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints. Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent is a failed premise. Do not invent a replacement or copy the repo.';
+
+export type PremiseIfFalse = 'stop' | 'omit';
+
+export type WorkOrderPremise = {
+  claim: string;
+  ifFalse: PremiseIfFalse;
+};
 
 export type WorkOrder = {
   intent: string;
@@ -16,6 +23,8 @@ export type WorkOrder = {
   repos: WorkOrderRepo[];
   constraints: string[];
   acceptance: string[];
+  consequences?: string[];
+  premises?: WorkOrderPremise[];
   rules: Rule[];
   rulePrecedence: string;
   project?: string;
@@ -59,11 +68,21 @@ export function formatDraftMarkdown(
     '',
     ...workOrder.repos.map(repoLine),
   ];
+  lines.push('', workOrder.rulePrecedence);
+  const consequences = workOrder.consequences ?? [];
+  if (consequences.length > 0) {
+    lines.push('', 'In the files this change writes:', '', ...consequences.map((line) => `- ${oneLine(line)}`));
+  }
+  const premises = workOrder.premises ?? [];
+  if (premises.length > 0) {
+    lines.push('', '## Verify before building', '', ...premises.map(premiseLine));
+  }
   if (readable.constraints.length > 0) {
     lines.push('', '## Constraints', '', ...readable.constraints.map((line) => `- ${oneLine(line)}`));
   }
-  if (readable.acceptance.length > 0) {
-    lines.push('', '## Acceptance', '', ...readable.acceptance.map((line) => `- ${oneLine(line)}`));
+  const acceptance = acceptanceLines(readable.acceptance, consequences);
+  if (acceptance.length > 0) {
+    lines.push('', '## Acceptance', '', ...acceptance.map((line) => `- ${oneLine(line)}`));
   }
   lines.push(...ruleSections(workOrder.rules, workOrder.rulePrecedence));
   const citations = citationLines(item.citations, decisions);
@@ -113,6 +132,8 @@ export function parseDraftModelText(
     input.chunks.flatMap((chunk) => (chunk.uri ? [chunk.uri] : [])),
   );
   const citations = parseCitations(body.citations, knownDecisionIds, knownDocumentUris);
+  const consequences = parseConsequences(body.consequences);
+  const premises = parsePremises(body.premises);
   const workOrder = retainDraftFacts(
     {
       intent,
@@ -120,6 +141,8 @@ export function parseDraftModelText(
       repos,
       constraints,
       acceptance,
+      ...(consequences.length > 0 ? { consequences } : {}),
+      ...(premises.length > 0 ? { premises } : {}),
       rules: input.rules,
       rulePrecedence: RULE_PRECEDENCE,
       project: input.project,
@@ -128,6 +151,20 @@ export function parseDraftModelText(
     input.prompt ?? '',
   );
   return { ok: true, workOrder, citations };
+}
+
+function premiseLine(premise: WorkOrderPremise): string {
+  const claim = oneLine(premise.claim).replace(/[.?!]+$/, '');
+  const outcome =
+    premise.ifFalse === 'stop'
+      ? 'If this is false, stop and ask.'
+      : 'If this is false, omit it and say so in the pull request.';
+  return `- ${claim}. ${outcome}`;
+}
+
+function acceptanceLines(acceptance: string[], consequences: string[]): string[] {
+  const seen = new Set(acceptance.map((line) => oneLine(line)));
+  return [...acceptance, ...consequences.filter((line) => !seen.has(oneLine(line)))];
 }
 
 function repoLine(repo: WorkOrderRepo): string {
@@ -724,6 +761,29 @@ function parseOptionalPaths(value: unknown): { ok: true; paths?: string[] } | { 
     return { ok: false };
   }
   return { ok: true, paths };
+}
+
+function parseConsequences(value: unknown): string[] {
+  return stringList(value);
+}
+
+function parsePremises(value: unknown): WorkOrderPremise[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const premises: WorkOrderPremise[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const claim = nonEmptyString((item as { claim?: unknown }).claim);
+    const ifFalse = (item as { ifFalse?: unknown }).ifFalse;
+    if (!claim || (ifFalse !== 'stop' && ifFalse !== 'omit')) {
+      continue;
+    }
+    premises.push({ claim, ifFalse });
+  }
+  return premises;
 }
 
 function parseCitations(
