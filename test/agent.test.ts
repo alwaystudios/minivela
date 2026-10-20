@@ -428,9 +428,12 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a risk that sets the order of the work into the summary.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('If two parts of the scope name different repos, name both as targets.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When part of the scope names no repo, infer that part from the repo map and include it when it is a different target.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A path the source already names is not a premise.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When the source does not choose which path, add a premise that names the step which uses it, with ifFalse stop.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('Every other step stays in the summary and does not wait on that premise.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('intent names the whole ticket in one line, not the first step.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A file premise stops only that step. Other steps do not wait.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not name a workspace, monorepo, or package file the source does not name.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Acceptance is only the lines copied from the source.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('intent names every step in one line, including a later step and work that runs in parallel.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not hedge a path.');
 });
 

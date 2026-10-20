@@ -69,7 +69,6 @@ export function formatDraftMarkdown(
     ...workOrder.repos.map(repoLine),
   ];
   lines.push('', workOrder.rulePrecedence);
-  const consequences = workOrder.consequences ?? [];
   const fileLines = linesBesideFiles(workOrder);
   if (fileLines.length > 0) {
     lines.push('', 'In the files this change writes:', '', ...fileLines.map((line) => `- ${oneLine(line)}`));
@@ -81,7 +80,7 @@ export function formatDraftMarkdown(
   if (readable.constraints.length > 0) {
     lines.push('', '## Constraints', '', ...readable.constraints.map((line) => `- ${oneLine(line)}`));
   }
-  const acceptance = acceptanceLines(readable.acceptance, consequences);
+  const acceptance = acceptanceLines(readable.acceptance);
   if (acceptance.length > 0) {
     lines.push('', '## Acceptance', '', ...acceptance.map((line) => `- ${oneLine(line)}`));
   }
@@ -172,13 +171,30 @@ function premiseLine(premise: WorkOrderPremise): string {
   const outcome =
     premise.ifFalse === 'omit'
       ? 'If this is false, omit it and say so in the pull request.'
-      : 'If this is false, stop and ask.';
+      : stopsOnlyItsStep(claim)
+        ? 'If this is false, stop that step and ask. Other steps do not wait.'
+        : 'If this is false, stop and ask.';
   return `- ${claim}. ${outcome}`;
 }
 
-function acceptanceLines(acceptance: string[], consequences: string[]): string[] {
-  const seen = new Set(acceptance.map((line) => oneLine(line)));
-  return [...acceptance, ...consequences.filter((line) => !seen.has(oneLine(line)))];
+function stopsOnlyItsStep(claim: string): boolean {
+  return /\/|\b[\w.-]+\.[a-z][a-z0-9]{0,4}\b|\bdockerfile\b/i.test(claim);
+}
+
+function acceptanceLines(acceptance: string[]): string[] {
+  return acceptance.map(markHumanVerified);
+}
+
+function markHumanVerified(line: string): string {
+  const text = oneLine(line);
+  if (/human-verified/i.test(text) || !needsHuman(text)) {
+    return text;
+  }
+  return `${text.replace(/\.+$/, '')}. human-verified, not agent-verified`;
+}
+
+function needsHuman(line: string): boolean {
+  return /\b(environments?|deploy(?:ed|ing)?|running|sign(?:ed)?[- ]off|production|credentials?|destroy(?:ed|ing)?)\b/i.test(line);
 }
 
 function repoLine(repo: WorkOrderRepo): string {

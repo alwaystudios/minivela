@@ -365,7 +365,8 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   });
   expect(markdown).toContain('In the files this change writes:');
   expect(markdown).toContain(`- ${consequence}`);
-  expect(markdown.match(/No comment mentions New Relic, history, or a ticket\./g)).toHaveLength(2);
+  expect(markdown.match(/No comment mentions New Relic, history, or a ticket\./g)).toHaveLength(1);
+  expect(markdown).not.toContain('## Acceptance\n\n- No comment mentions New Relic');
   expect(markdown.match(/Do not mention a ticket, New Relic, or history in a comment\./g)).toHaveLength(1);
   expect(markdown).not.toContain('- Do not mention a ticket, New Relic, or history in a comment.');
   expect(markdown).toContain('## Verify before building');
@@ -567,6 +568,38 @@ test('a short rule paraphrase drops and a job line stays', () => {
     'Keep the code clear.',
     'Ship the code change.',
   ]);
+});
+
+test('a file premise stops its step and a live check is human-verified', () => {
+  const markdown = formatDraftMarkdown(
+    {
+      project: 'acme',
+      draftId: 'draft-1',
+      createdAt: '2026-10-20T12:00:00.000Z',
+      workOrder: {
+        intent: 'Remove the agent, rebuild the monitors, and destroy the stack.',
+        summary: 'Do the three steps.',
+        repos: [{ owner: 'acme', repo: 'web' }],
+        constraints: ['Keep the later step.'],
+        acceptance: ['Environments running the agent confirmed.', 'No New Relic text remains in CLAUDE.md.'],
+        premises: [
+          { claim: 'apps/portal/instrumentation.ts exists', ifFalse: 'stop' },
+          { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
+        ],
+        rules: [],
+        rulePrecedence: RULE_PRECEDENCE,
+        project: 'acme',
+      },
+      citations: { decisionIds: [], documentUris: [] },
+    },
+  );
+  expect(markdown).toContain(
+    '- apps/portal/instrumentation.ts exists. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
+  expect(markdown).toContain('- Environments running the agent confirmed. human-verified, not agent-verified');
+  expect(markdown).toContain('- No New Relic text remains in CLAUDE.md.');
+  expect(markdown).not.toMatch(/No New Relic text remains in CLAUDE\.md\..*human-verified/);
 });
 
 test('an acceptance line from the source stays even when it shares a rule’s words', () => {
