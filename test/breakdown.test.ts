@@ -8,16 +8,20 @@ function row(input: {
   ordinal: number;
   body: string;
   project?: string;
+  page?: string;
 }): BreakdownRow {
-  return {
+  const shared = {
     project: input.project ?? 'acme',
     ticketId: breakdownTicketId(input.breakdownId, input.ordinal),
     breakdownId: input.breakdownId,
-    kind: input.kind,
     ordinal: input.ordinal,
     body: input.body,
     createdAt,
   };
+  if (input.kind === 'story') {
+    return { ...shared, kind: 'story' };
+  }
+  return { ...shared, kind: input.kind, page: input.page ?? 'acme/notes/billing.md' };
 }
 
 test('a breakdown sort key is the id and the ordinal', () => {
@@ -68,6 +72,56 @@ test('an epic is followed by its stories in ordinal order', async () => {
     ),
     status: 'success',
   });
+});
+
+test('an epic without a source page cannot be read', async () => {
+  const result = await readBreakdown({
+    project: 'acme',
+    breakdownId: 'bd-1',
+    query: async () => [
+      {
+        project: 'acme',
+        ticketId: 'bd-1#0',
+        breakdownId: 'bd-1',
+        kind: 'epic',
+        ordinal: 0,
+        body: '# Bill the new meter',
+        createdAt,
+      },
+    ],
+  });
+  expect(result).toEqual({ response: 'The stored breakdown could not be read.', status: 'error' });
+});
+
+test('a refusal without a source page cannot be read', async () => {
+  const result = await readBreakdown({
+    project: 'acme',
+    breakdownId: 'bd-r',
+    query: async () => [
+      {
+        project: 'acme',
+        ticketId: 'bd-r#0',
+        breakdownId: 'bd-r',
+        kind: 'refusal',
+        ordinal: 0,
+        body: 'The page is empty.',
+        createdAt,
+      },
+    ],
+  });
+  expect(result).toEqual({ response: 'The stored breakdown could not be read.', status: 'error' });
+});
+
+test('a story that records a source page cannot be read', async () => {
+  const result = await readBreakdown({
+    project: 'acme',
+    breakdownId: 'bd-1',
+    query: async () => [
+      row({ breakdownId: 'bd-1', kind: 'epic', ordinal: 0, body: '# Bill the new meter' }),
+      { ...row({ breakdownId: 'bd-1', kind: 'story', ordinal: 1, body: '# Show the tariff' }), page: 'acme/notes/billing.md' },
+    ],
+  });
+  expect(result).toEqual({ response: 'The stored breakdown could not be read.', status: 'error' });
 });
 
 test('an unknown breakdown id returns an error', async () => {

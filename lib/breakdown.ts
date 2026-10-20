@@ -2,15 +2,18 @@ import type { AnswerResult } from './agent/answer.js';
 
 export type BreakdownKind = 'epic' | 'story' | 'refusal';
 
-export type BreakdownRow = {
+type BreakdownFields = {
   project: string;
   ticketId: string;
   breakdownId: string;
-  kind: BreakdownKind;
   ordinal: number;
   body: string;
   createdAt: string;
 };
+
+export type BreakdownRow =
+  | (BreakdownFields & { kind: 'epic' | 'refusal'; page: string })
+  | (BreakdownFields & { kind: 'story' });
 
 export function breakdownTicketId(breakdownId: string, ordinal: number): string {
   return `${breakdownId}#${ordinal}`;
@@ -118,7 +121,18 @@ function breakdownRowFromItem(raw: Record<string, unknown>): BreakdownRow | unde
   ) {
     return undefined;
   }
-  return { project, ticketId, breakdownId, kind, ordinal, body, createdAt };
+  const shared = { project, ticketId, breakdownId, ordinal, body, createdAt };
+  if (kind === 'story') {
+    if (raw.page !== undefined) {
+      return undefined;
+    }
+    return { ...shared, kind };
+  }
+  const page = nonEmptyString(raw.page);
+  if (!page) {
+    return undefined;
+  }
+  return { ...shared, kind, page };
 }
 
 function isRenderable(rows: BreakdownRow[]): boolean {

@@ -393,7 +393,7 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'BreakdownsTableName', {
       value: breakdowns.tableName,
       description:
-        'Page breakdowns. Partition project, sort ticketId as <breakdownId>#<ordinal>. Each item is breakdownId, kind, ordinal, body, createdAt. A fetch renders one breakdown.',
+        'Page breakdowns. Partition project, sort ticketId as <breakdownId>#<ordinal>. Each item is breakdownId, kind, ordinal, body, createdAt. The epic records the source page. A refusal records it too. A story does not. A fetch renders one breakdown.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,

@@ -65,7 +65,12 @@ test('a missing page stores one refusal and does not call the model', async () =
     status: 'refused',
   });
   expect(put).toHaveBeenCalledWith([
-    expect.objectContaining({ kind: 'refusal', ordinal: 0, body: 'No object at acme/notes/billing.md.' }),
+    expect.objectContaining({
+      kind: 'refusal',
+      ordinal: 0,
+      page,
+      body: 'No object at acme/notes/billing.md.',
+    }),
   ]);
   expect(complete).not.toHaveBeenCalled();
 });
@@ -191,11 +196,14 @@ test('a drafted epic and its stories are stored in ordinal order', async () => {
       ticketId: 'bd-1#0',
       kind: 'epic',
       ordinal: 0,
+      page,
       body: '# Bill the new meter',
     }),
     expect.objectContaining({ ticketId: 'bd-1#1', kind: 'story', ordinal: 1, body: '# Show the tariff' }),
     expect.objectContaining({ ticketId: 'bd-1#2', kind: 'story', ordinal: 2, body: '# Record the reading' }),
   ]);
+  const rows = put.mock.calls[0][0] as Array<Record<string, unknown>>;
+  expect(rows.slice(1).every((row) => !Object.prototype.hasOwnProperty.call(row, 'page'))).toBe(true);
 });
 
 test('the page chunk is not sent to the model', async () => {
@@ -222,7 +230,7 @@ test('a page the model cannot split is stored as a refusal', async () => {
     status: 'refused',
   });
   expect(put).toHaveBeenCalledWith([
-    expect.objectContaining({ kind: 'refusal', ordinal: 0, body: 'The page is a status report.' }),
+    expect.objectContaining({ kind: 'refusal', ordinal: 0, page, body: 'The page is a status report.' }),
   ]);
 });
 

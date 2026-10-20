@@ -115,7 +115,13 @@ async function loadTemplate(input: {
 }
 
 async function storeRefusal(
-  input: { project: string; put: (rows: BreakdownRow[]) => Promise<void>; breakdownId: string; createdAt: string },
+  input: {
+    project: string;
+    page: string;
+    put: (rows: BreakdownRow[]) => Promise<void>;
+    breakdownId: string;
+    createdAt: string;
+  },
   reason: string,
 ): Promise<AnswerResult> {
   const rows = [row(input, 'refusal', 0, reason)];
@@ -124,20 +130,23 @@ async function storeRefusal(
 }
 
 function row(
-  input: { project: string; breakdownId: string; createdAt: string },
+  input: { project: string; page: string; breakdownId: string; createdAt: string },
   kind: BreakdownRow['kind'],
   ordinal: number,
   body: string,
 ): BreakdownRow {
-  return {
+  const shared = {
     project: input.project,
     ticketId: breakdownTicketId(input.breakdownId, ordinal),
     breakdownId: input.breakdownId,
-    kind,
     ordinal,
     body,
     createdAt: input.createdAt,
   };
+  if (kind === 'story') {
+    return { ...shared, kind };
+  }
+  return { ...shared, kind, page: input.page };
 }
 
 function chunkIsPage(uri: string | undefined, page: string): boolean {
