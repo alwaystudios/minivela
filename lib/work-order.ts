@@ -70,7 +70,7 @@ export function formatDraftMarkdown(
   ];
   lines.push('', workOrder.rulePrecedence);
   const consequences = workOrder.consequences ?? [];
-  const fileLines = consequences.length > 0 ? consequences : ruleTitles(workOrder.rules);
+  const fileLines = linesBesideFiles(workOrder);
   if (fileLines.length > 0) {
     lines.push('', 'In the files this change writes:', '', ...fileLines.map((line) => `- ${oneLine(line)}`));
   }
@@ -154,11 +154,16 @@ export function parseDraftModelText(
   return { ok: true, workOrder, citations };
 }
 
-function ruleTitles(rules: Rule[]): string[] {
-  return rules.flatMap((rule) => {
+function linesBesideFiles(workOrder: WorkOrder): string[] {
+  const consequences = workOrder.consequences ?? [];
+  const uncovered = workOrder.rules.flatMap((rule) => {
     const title = rule.title.trim();
-    return title ? [title] : [];
+    if (!title || consequences.some((line) => restatesRule(line, [rule]))) {
+      return [];
+    }
+    return [title];
   });
+  return [...consequences, ...uncovered];
 }
 
 function premiseLine(premise: WorkOrderPremise): string {

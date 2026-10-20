@@ -330,6 +330,12 @@ test('a rule consequence stays next to the files and a premise says what a miss 
           title: 'Comments stay free of tickets and vendors',
           body: 'Do not mention a ticket, New Relic, or history in a comment.',
         },
+        {
+          project: 'global',
+          ruleId: 'csv-only',
+          title: 'CSV only',
+          body: 'Do not add Excel.',
+        },
       ],
     },
   );
@@ -368,6 +374,7 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   expect(markdown).toContain('- Skipped. If this is false, stop and ask.');
   expect(markdown).toContain('- Logs are in Datadog. If this is false, stop and ask.');
   expect(markdown).not.toContain('- Comments stay free of tickets and vendors');
+  expect(markdown).toContain('- CSV only');
   expect(markdown).toContain('- Query path covered by a test.');
   expect(markdown).toContain('- The export page offers CSV. human-verified, not agent-verified');
   expect(markdown).not.toMatch(/Query path covered by a test\..*human-verified/);
