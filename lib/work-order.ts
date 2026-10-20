@@ -459,7 +459,8 @@ function tidyPhrase(text: string): string {
     .replace(/\(\s*\)/g, '')
     .replace(/\(\s+/g, '(')
     .replace(/\s+\)/g, ')')
-    .replace(/\s+([,.;!?])/g, '$1')
+    .replace(/\s+([,;!?])/g, '$1')
+    .replace(/\s+\.(?![A-Za-z0-9])/g, '.')
     .replace(/^[ \t]*[,;]\s*/, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
