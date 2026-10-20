@@ -55,6 +55,13 @@ export class MinivelaStack extends cdk.Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
+
+    const breakdowns = new dynamodb.Table(this, 'Breakdowns', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'ticketId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
     const cfnDecisions = decisions.node.defaultChild as dynamodb.CfnTable;
     cfnDecisions.vectorIndexes = [
       {
@@ -281,6 +288,7 @@ export class MinivelaStack extends cdk.Stack {
         RULES_TABLE_NAME: rules.tableName,
         REPOS_TABLE_NAME: repos.tableName,
         DRAFTS_TABLE_NAME: drafts.tableName,
+        BREAKDOWNS_TABLE_NAME: breakdowns.tableName,
         DOCUMENTS_BUCKET_NAME: documents.bucketName,
       },
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
@@ -324,19 +332,19 @@ export class MinivelaStack extends cdk.Stack {
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:GetItem'],
-        resources: [decisions.tableArn, drafts.tableArn],
+        resources: [decisions.tableArn, drafts.tableArn, breakdowns.tableArn],
       }),
     );
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:Query'],
-        resources: [rules.tableArn, repos.tableArn],
+        resources: [rules.tableArn, repos.tableArn, breakdowns.tableArn],
       }),
     );
     agent.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['dynamodb:PutItem'],
-        resources: [drafts.tableArn],
+        resources: [drafts.tableArn, breakdowns.tableArn],
       }),
     );
 
@@ -368,6 +376,11 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'DraftsTableName', {
       value: drafts.tableName,
       description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft. workOrder.rulePrecedence says the written code follows the rule, the order wins on policy, and a missing or conflicting fact is a failed premise. workOrder.consequences is what a rule requires of this change. workOrder.premises is what to confirm before building.',
+    });
+    new cdk.CfnOutput(this, 'BreakdownsTableName', {
+      value: breakdowns.tableName,
+      description:
+        'Page breakdowns. Partition project, sort ticketId as <breakdownId>#<ordinal>. Each item is breakdownId, kind, ordinal, body, createdAt. A fetch renders one breakdown.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,

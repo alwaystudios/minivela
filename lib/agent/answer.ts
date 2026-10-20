@@ -24,6 +24,7 @@ export function parseInvokePayload(
 ):
   | { project: string; prompt?: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
   | { project: string; draftId: string; format?: DraftResponseFormat }
+  | { project: string; breakdownId: string }
   | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { response: 'Send JSON with prompt and project.', status: 'error' };
@@ -34,11 +35,14 @@ export function parseInvokePayload(
     skill?: unknown;
     format?: unknown;
     draftId?: unknown;
+    breakdownId?: unknown;
     ticket?: unknown;
+    page?: unknown;
   };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   const project = typeof body.project === 'string' ? body.project.trim() : '';
   const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : '';
+  const breakdownId = typeof body.breakdownId === 'string' ? body.breakdownId.trim() : '';
   if (body.ticket !== undefined && body.ticket !== '' && typeof body.ticket !== 'string') {
     return { response: 'Name a ticket key.', status: 'error' };
   }
@@ -52,6 +56,22 @@ export function parseInvokePayload(
   const format = parseFormat(body.format);
   if (typeof format !== 'string' && format !== undefined) {
     return format;
+  }
+  if (breakdownId) {
+    if (
+      prompt ||
+      ticket ||
+      draftId ||
+      format ||
+      (body.skill !== undefined && body.skill !== '') ||
+      (body.page !== undefined && body.page !== '')
+    ) {
+      return {
+        response: 'breakdownId fetches a stored breakdown. Omit prompt, skill, page, ticket, draftId, and format.',
+        status: 'error',
+      };
+    }
+    return { project, breakdownId };
   }
   if (draftId) {
     if (prompt || ticket || (body.skill !== undefined && body.skill !== '')) {

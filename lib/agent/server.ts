@@ -4,7 +4,7 @@ import { RetrieveCommand, BedrockAgentRuntimeClient } from '@aws-sdk/client-bedr
 import { InvokeModelCommand, BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { DynamoDBClient, GetItemCommand, QueryCommand, SearchVectorsCommand } from '@aws-sdk/client-dynamodb';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand as DocQueryCommand } from '@aws-sdk/lib-dynamodb';
 import { embedText } from '../embed.js';
 import {
   loadPartitions,
@@ -25,6 +25,7 @@ import {
   type RetrievedDecision,
   type ScoredDecision,
 } from '../search-decisions.js';
+import { breakdownQueryInput, readBreakdown } from '../breakdown.js';
 import type { DraftWrite } from '../work-order.js';
 import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
@@ -342,6 +343,13 @@ async function putDraft(item: DraftWrite): Promise<void> {
   );
 }
 
+async function queryBreakdown(key: { project: string; breakdownId: string }): Promise<unknown[]> {
+  const result = await docClient.send(
+    new DocQueryCommand(breakdownQueryInput(requiredEnv('BREAKDOWNS_TABLE_NAME'), key.project, key.breakdownId)),
+  );
+  return result.Items ?? [];
+}
+
 async function getDraft(key: { project: string; draftId: string }): Promise<unknown> {
   const result = await docClient.send(
     new GetCommand({
@@ -387,6 +395,15 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
   const parsedPayload = parseInvokePayload(parsed);
   if ('status' in parsedPayload) {
     json(res, 400, parsedPayload);
+    return;
+  }
+  if ('breakdownId' in parsedPayload) {
+    const result = await readBreakdown({
+      project: parsedPayload.project,
+      breakdownId: parsedPayload.breakdownId,
+      query: queryBreakdown,
+    });
+    json(res, 200, result);
     return;
   }
   if ('draftId' in parsedPayload) {
