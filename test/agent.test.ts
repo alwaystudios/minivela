@@ -86,6 +86,26 @@ test('a stored draft is fetched by id', () => {
   });
 });
 
+test('a stored breakdown is fetched by id', () => {
+  expect(parseInvokePayload({ project: 'acme', breakdownId: 'bd-1' })).toEqual({
+    project: 'acme',
+    breakdownId: 'bd-1',
+  });
+});
+
+test('a breakdown fetch rejects a prompt, a skill, or a draft id', () => {
+  expect(
+    parseInvokePayload({
+      project: 'acme',
+      breakdownId: 'bd-1',
+      prompt: 'split this page',
+    }),
+  ).toEqual({
+    response: 'breakdownId fetches a stored breakdown. Omit prompt, skill, page, ticket, draftId, and format.',
+    status: 'error',
+  });
+});
+
 test('a fetch rejects a prompt or a skill', () => {
   expect(
     parseInvokePayload({

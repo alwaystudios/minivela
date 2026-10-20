@@ -16,7 +16,7 @@ test('the stack name defaults to minivela and a transcript put can write a decis
 
   expect(stack.stackName).toBe('minivela');
   template.resourceCountIs('AWS::S3::Bucket', 2);
-  template.resourceCountIs('AWS::DynamoDB::Table', 4);
+  template.resourceCountIs('AWS::DynamoDB::Table', 5);
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     BillingMode: 'PAY_PER_REQUEST',
@@ -71,6 +71,21 @@ test('the stack name defaults to minivela and a transcript put can write a decis
   );
   expect(draftsTable).toBeDefined();
   expect(draftsTable?.Properties.VectorIndexes).toBeUndefined();
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    BillingMode: 'PAY_PER_REQUEST',
+    KeySchema: [
+      { AttributeName: 'project', KeyType: 'HASH' },
+      { AttributeName: 'ticketId', KeyType: 'RANGE' },
+    ],
+  });
+  const breakdownsTable = Object.values(tables).find((table) =>
+    JSON.stringify(table.Properties.KeySchema).includes('ticketId'),
+  );
+  expect(breakdownsTable).toBeDefined();
+  expect(breakdownsTable?.Properties.VectorIndexes).toBeUndefined();
+  template.hasOutput('BreakdownsTableName', {
+    Description: Match.stringLikeRegexp('breakdownId'),
+  });
   template.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::SQS::Queue', {
     MessageRetentionPeriod: 14 * 24 * 60 * 60,
@@ -208,6 +223,7 @@ test('the knowledge base reads the documents bucket only', () => {
       RULES_TABLE_NAME: Match.anyValue(),
       REPOS_TABLE_NAME: Match.anyValue(),
       DRAFTS_TABLE_NAME: Match.anyValue(),
+      BREAKDOWNS_TABLE_NAME: Match.anyValue(),
       DOCUMENTS_BUCKET_NAME: Match.anyValue(),
     }),
   });
@@ -219,6 +235,11 @@ test('the knowledge base reads the documents bucket only', () => {
     JSON.stringify(policy.Properties.Roles).includes(agentRoleId),
   );
   const agentPolicy = JSON.stringify(agentPolicies);
+  const breakdownTableId = Object.keys(template.findResources('AWS::DynamoDB::Table')).find((id) =>
+    JSON.stringify(template.findResources('AWS::DynamoDB::Table')[id].Properties.KeySchema).includes('ticketId'),
+  );
+  expect(breakdownTableId).toBeDefined();
+  expect(agentPolicy.split(breakdownTableId ?? '').length - 1).toBe(3);
   expect(agentPolicy).toContain('s3:ListBucket');
   expect(agentPolicy).toContain('s3:GetObject');
   expect(agentPolicy).toContain(documentsBucketId);

@@ -10,7 +10,7 @@ export type RetrievedChunk = {
   uri?: string;
 };
 
-export type AnswerStatus = 'success' | 'error';
+export type AnswerStatus = 'success' | 'error' | 'refused';
 
 export type AnswerResult = {
   response: string;
@@ -24,6 +24,7 @@ export function parseInvokePayload(
 ):
   | { project: string; prompt?: string; skill?: InvokeSkill; format?: DraftResponseFormat; ticket?: string }
   | { project: string; draftId: string; format?: DraftResponseFormat }
+  | { project: string; breakdownId: string }
   | AnswerResult {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     return { response: 'Send JSON with prompt and project.', status: 'error' };
@@ -34,11 +35,14 @@ export function parseInvokePayload(
     skill?: unknown;
     format?: unknown;
     draftId?: unknown;
+    breakdownId?: unknown;
     ticket?: unknown;
+    page?: unknown;
   };
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   const project = typeof body.project === 'string' ? body.project.trim() : '';
   const draftId = typeof body.draftId === 'string' ? body.draftId.trim() : '';
+  const breakdownId = typeof body.breakdownId === 'string' ? body.breakdownId.trim() : '';
   if (body.ticket !== undefined && body.ticket !== '' && typeof body.ticket !== 'string') {
     return { response: 'Name a ticket key.', status: 'error' };
   }
@@ -53,11 +57,22 @@ export function parseInvokePayload(
   if (typeof format !== 'string' && format !== undefined) {
     return format;
   }
+  if (breakdownId) {
+    return (
+      rejectIfSet(
+        'breakdownId fetches a stored breakdown. Omit prompt, skill, page, ticket, draftId, and format.',
+        [prompt, body.skill, body.page, ticket, draftId, format],
+      ) ?? { project, breakdownId }
+    );
+  }
   if (draftId) {
-    if (prompt || ticket || (body.skill !== undefined && body.skill !== '')) {
-      return { response: 'draftId fetches a stored draft. Omit prompt, skill, and ticket.', status: 'error' };
-    }
-    return format ? { project, draftId, format } : { project, draftId };
+    return (
+      rejectIfSet('draftId fetches a stored draft. Omit prompt, skill, and ticket.', [prompt, body.skill, ticket]) ?? {
+        project,
+        draftId,
+        ...(format ? { format } : {}),
+      }
+    );
   }
   if (!prompt && !ticket) {
     return { response: 'Ask a question in prompt, or name a ticket.', status: 'error' };
@@ -99,6 +114,13 @@ export function parseInvokePayload(
     return { project, skill, format, ticket };
   }
   return { prompt, project, skill, format };
+}
+
+function rejectIfSet(response: string, values: unknown[]): AnswerResult | undefined {
+  if (values.some((value) => value !== undefined && value !== '')) {
+    return { response, status: 'error' };
+  }
+  return undefined;
 }
 
 function parseFormat(value: unknown): DraftResponseFormat | undefined | AnswerResult {
