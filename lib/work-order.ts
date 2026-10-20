@@ -69,7 +69,6 @@ export function formatDraftMarkdown(
     ...workOrder.repos.map(repoLine),
   ];
   lines.push('', workOrder.rulePrecedence);
-  const consequences = workOrder.consequences ?? [];
   const fileLines = linesBesideFiles(workOrder);
   if (fileLines.length > 0) {
     lines.push('', 'In the files this change writes:', '', ...fileLines.map((line) => `- ${oneLine(line)}`));
@@ -81,7 +80,7 @@ export function formatDraftMarkdown(
   if (readable.constraints.length > 0) {
     lines.push('', '## Constraints', '', ...readable.constraints.map((line) => `- ${oneLine(line)}`));
   }
-  const acceptance = acceptanceLines(readable.acceptance, consequences);
+  const acceptance = acceptanceLines(readable.acceptance);
   if (acceptance.length > 0) {
     lines.push('', '## Acceptance', '', ...acceptance.map((line) => `- ${oneLine(line)}`));
   }
@@ -150,6 +149,7 @@ export function parseDraftModelText(
     },
     groundingSource(input, repos),
     input.prompt ?? '',
+    acceptanceWords(input, repos),
   );
   return { ok: true, workOrder, citations };
 }
@@ -171,13 +171,30 @@ function premiseLine(premise: WorkOrderPremise): string {
   const outcome =
     premise.ifFalse === 'omit'
       ? 'If this is false, omit it and say so in the pull request.'
-      : 'If this is false, stop and ask.';
+      : stopsOnlyItsStep(claim)
+        ? 'If this is false, stop that step and ask. Other steps do not wait.'
+        : 'If this is false, stop and ask.';
   return `- ${claim}. ${outcome}`;
 }
 
-function acceptanceLines(acceptance: string[], consequences: string[]): string[] {
-  const seen = new Set(acceptance.map((line) => oneLine(line)));
-  return [...acceptance, ...consequences.filter((line) => !seen.has(oneLine(line)))];
+function stopsOnlyItsStep(claim: string): boolean {
+  return /\/|\b[\w.-]+\.[a-z][a-z0-9]{0,4}\b|\bdockerfile\b/i.test(claim);
+}
+
+function acceptanceLines(acceptance: string[]): string[] {
+  return acceptance.map(markHumanVerified);
+}
+
+function markHumanVerified(line: string): string {
+  const text = oneLine(line);
+  if (/human-verified/i.test(text) || !needsHuman(text)) {
+    return text;
+  }
+  return `${text.replace(/\.+$/, '')}. human-verified, not agent-verified`;
+}
+
+function needsHuman(line: string): boolean {
+  return /\b(environments?|deploy(?:ed|ing)?|running|sign(?:ed)?[- ]off|production|credentials?|destroy(?:ed|ing)?)\b/i.test(line);
 }
 
 function repoLine(repo: WorkOrderRepo): string {
@@ -292,7 +309,12 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
-function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: string): WorkOrder {
+function retainDraftFacts(
+  workOrder: WorkOrder,
+  source: string,
+  anchorsFrom: string,
+  acceptanceSource: Set<string>,
+): WorkOrder {
   const readable = withoutRestatedRules(workOrder);
   const sourceWords = new Set(words(source));
   const summaryText = withoutUngroundedPhrases(readable.summary || workOrder.summary, sourceWords);
@@ -300,8 +322,12 @@ function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: str
     const next = withoutUngroundedPhrases(line, sourceWords);
     return next ? [next] : [];
   });
-  const acceptance = readable.acceptance.flatMap((line) => {
-    const next = withoutUngroundedPhrases(line, sourceWords);
+  const acceptance = workOrder.acceptance.flatMap((line) => {
+    const kept = acceptanceLine(line, workOrder.rules, acceptanceSource);
+    if (!kept) {
+      return [];
+    }
+    const next = withoutUngroundedPhrases(kept, acceptanceSource);
     return next ? [next] : [];
   });
   const summary = appendMissingAnchors(
@@ -502,10 +528,7 @@ function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constrai
       const kept = bulletWithoutRules(line, workOrder.rules);
       return kept ? [kept] : [];
     }),
-    acceptance: workOrder.acceptance.flatMap((line) => {
-      const kept = bulletWithoutRules(line, workOrder.rules);
-      return kept ? [kept] : [];
-    }),
+    acceptance: workOrder.acceptance,
   };
 }
 
@@ -688,6 +711,54 @@ function groundingSource(input: { prompt?: string; project: string }, repos: Wor
   return [input.prompt ?? '', input.project, ...repos.flatMap((repo) => [repo.owner, repo.repo, ...(repo.paths ?? [])])].join(
     '\n',
   );
+}
+
+function acceptanceWords(
+  input: {
+    prompt?: string;
+    project: string;
+    decisions: Array<{ title?: string; content?: string; quote?: string }>;
+    chunks: Array<{ text?: string }>;
+  },
+  repos: WorkOrderRepo[],
+): Set<string> {
+  return new Set(
+    words(
+      [
+        groundingSource(input, repos),
+        ...input.decisions.flatMap((decision) => [decision.title ?? '', decision.content ?? '', decision.quote ?? '']),
+        ...input.chunks.map((chunk) => chunk.text ?? ''),
+      ].join('\n'),
+    ),
+  );
+}
+
+function acceptanceLine(line: string, rules: Rule[], sourceWords: Set<string>): string | undefined {
+  const parts = line
+    .split(/\s*(?:—|;)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const fromSource = (part: string) => !restatesRule(part, rules) || lineFromSource(part, sourceWords);
+  if (parts.length < 2) {
+    return fromSource(line) ? line : undefined;
+  }
+  const kept = parts.filter(fromSource);
+  if (kept.length === 0 || (kept.length === parts.length && restatesRule(line, rules) && !lineFromSource(line, sourceWords))) {
+    return undefined;
+  }
+  if (kept.length === parts.length) {
+    return line;
+  }
+  return kept.join('; ');
+}
+
+function lineFromSource(line: string, sourceWords: Set<string>): boolean {
+  const lineWords = words(line);
+  if (lineWords.length === 0) {
+    return false;
+  }
+  const shared = lineWords.filter((word) => sourceWords.has(word));
+  return shared.length / lineWords.length >= 0.6;
 }
 
 function restatesRule(constraint: string, rules: Rule[]): boolean {

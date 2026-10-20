@@ -292,7 +292,7 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
   expect(markdown).not.toContain('Do not widen any auth');
   expect(markdown).not.toContain('No secrets, tokens, or real PII in code, fixtures');
   expect(markdown).not.toContain('Do not embed secrets, tokens, or real PII');
-  expect(markdown).not.toContain('No unrelated code or dependencies');
+  expect(markdown).toContain('- No unrelated code or dependencies are changed in the same diff.');
   expect(markdown).not.toContain('Keep functions and variable names');
   expect(markdown).toContain('### Do not silently widen auth, tenancy, or public API.');
   expect(markdown).toContain('quote: Excel is out of scope.');
@@ -365,7 +365,8 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   });
   expect(markdown).toContain('In the files this change writes:');
   expect(markdown).toContain(`- ${consequence}`);
-  expect(markdown.match(/No comment mentions New Relic, history, or a ticket\./g)).toHaveLength(2);
+  expect(markdown.match(/No comment mentions New Relic, history, or a ticket\./g)).toHaveLength(1);
+  expect(markdown).not.toContain('## Acceptance\n\n- No comment mentions New Relic');
   expect(markdown.match(/Do not mention a ticket, New Relic, or history in a comment\./g)).toHaveLength(1);
   expect(markdown).not.toContain('- Do not mention a ticket, New Relic, or history in a comment.');
   expect(markdown).toContain('## Verify before building');
@@ -569,6 +570,77 @@ test('a short rule paraphrase drops and a job line stays', () => {
   ]);
 });
 
+test('a file premise stops its step and a live check is human-verified', () => {
+  const markdown = formatDraftMarkdown(
+    {
+      project: 'acme',
+      draftId: 'draft-1',
+      createdAt: '2026-10-20T12:00:00.000Z',
+      workOrder: {
+        intent: 'Remove the agent, rebuild the monitors, and destroy the stack.',
+        summary: 'Do the three steps.',
+        repos: [{ owner: 'acme', repo: 'web' }],
+        constraints: ['Keep the later step.'],
+        acceptance: ['Environments running the agent confirmed.', 'No New Relic text remains in CLAUDE.md.'],
+        premises: [
+          { claim: 'apps/portal/instrumentation.ts exists', ifFalse: 'stop' },
+          { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
+        ],
+        rules: [],
+        rulePrecedence: RULE_PRECEDENCE,
+        project: 'acme',
+      },
+      citations: { decisionIds: [], documentUris: [] },
+    },
+  );
+  expect(markdown).toContain(
+    '- apps/portal/instrumentation.ts exists. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
+  expect(markdown).toContain('- Environments running the agent confirmed. human-verified, not agent-verified');
+  expect(markdown).toContain('- No New Relic text remains in CLAUDE.md.');
+  expect(markdown).not.toMatch(/No New Relic text remains in CLAUDE\.md\..*human-verified/);
+});
+
+test('an acceptance line from the source stays even when it shares a rule’s words', () => {
+  const fromSource = 'Do not refactor unrelated code in the same change.';
+  const invented = 'Prefer small reviewable diffs with no drive-by refactors.';
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: `Update the libraries. ${fromSource}`,
+    acceptance: [fromSource, invented],
+    rules: [smallDiffs],
+  });
+  expect(kept.acceptance).toContain(fromSource);
+  expect(kept.acceptance).not.toContain(invented);
+});
+
+test('a mixed acceptance line keeps the job clause and drops the rule clause', () => {
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: 'Update the libraries. The export page offers CSV.',
+    acceptance: [
+      'The export page offers CSV — Prefer small, reviewable diffs. Do not refactor unrelated code in the same change.',
+    ],
+    rules: [smallDiffs],
+  });
+  expect(kept.acceptance).toEqual(['The export page offers CSV']);
+});
+
+test('an acceptance line copied from a document stays when it shares a rule’s words', () => {
+  const fromDocument = 'Do not refactor unrelated code in the same change.';
+  const invented = 'Prefer small reviewable diffs with no drive-by refactors.';
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: 'Update the libraries.',
+    acceptance: [fromDocument, invented],
+    rules: [smallDiffs],
+    chunks: [{ text: fromDocument }],
+  });
+  expect(kept.acceptance).toContain(fromDocument);
+  expect(kept.acceptance).not.toContain(invented);
+});
+
 test('a path that starts with a dot keeps the space in front of it', () => {
   const drafted = draftOf({
     summary:
@@ -630,8 +702,10 @@ function draftOf(input: {
   summary: string;
   prompt: string;
   constraints?: string[];
+  acceptance?: string[];
   rules?: Array<{ project: string; ruleId: string; title: string; body: string }>;
   decisions?: Array<{ decisionId: string; content?: string; quote?: string }>;
+  chunks?: Array<{ text?: string }>;
 }) {
   const parsed = parseDraftModelText(
     JSON.stringify({
@@ -639,14 +713,14 @@ function draftOf(input: {
       summary: input.summary,
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: input.constraints ?? ['Only change the export path.'],
-      acceptance: ['The export page offers CSV.'],
+      acceptance: input.acceptance ?? ['The export page offers CSV.'],
     }),
     {
       project: 'acme',
       prompt: input.prompt,
       repos: [web],
       decisions: input.decisions ?? [],
-      chunks: [],
+      chunks: input.chunks ?? [],
       rules: input.rules ?? [],
     },
   );
