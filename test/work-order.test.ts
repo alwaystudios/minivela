@@ -569,6 +569,25 @@ test('a short rule paraphrase drops and a job line stays', () => {
   ]);
 });
 
+test('a path that starts with a dot keeps the space in front of it', () => {
+  const drafted = draftOf({
+    summary:
+      'Remove the variable from 9. .github/workflows/cd.yml and leave terraform/newrelic/, .github/workflows/newrelic.yml or ./scripts and see ../.github/workflows. Update the libraries .',
+    prompt:
+      'Remove the variable from .github/workflows/cd.yml and leave terraform/newrelic/ and .github/workflows/newrelic.yml or ./scripts and see ../.github/workflows. Update the libraries.',
+  });
+  expect(drafted.summary).toContain('9. .github/workflows/cd.yml');
+  expect(drafted.summary).toContain('terraform/newrelic/, .github/workflows/newrelic.yml');
+  expect(drafted.summary).toContain('or ./scripts');
+  expect(drafted.summary).toContain('see ../.github/workflows');
+  expect(drafted.summary).not.toContain('9..github');
+  expect(drafted.summary).not.toContain(',.github');
+  expect(drafted.summary).not.toContain('or./');
+  expect(drafted.summary).not.toContain('see../');
+  expect(drafted.summary).toContain('Update the libraries.');
+  expect(drafted.summary).not.toContain('libraries .');
+});
+
 test('a draft stores a link once and skips the ticket address', () => {
   const encoded = 'https://example.com/findings?filters=%7B%22status%22%3A%22open%22%7D';
   const decoded = 'https://example.com/findings?filters={"status":"open"}';
