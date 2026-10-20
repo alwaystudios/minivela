@@ -367,7 +367,7 @@ export class MinivelaStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'DraftsTableName', {
       value: drafts.tableName,
-      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft. workOrder.rulePrecedence says the written code follows the rule, the order wins on policy, and a missing fact is a failed premise. workOrder.consequences is what a rule requires of this change. workOrder.premises is what to confirm before building.',
+      description: 'Work-order drafts. Partition project, sort draftId. Each item is workOrder, citations, createdAt. workOrder.rules is the rules loaded for that draft. workOrder.rulePrecedence says the written code follows the rule, the order wins on policy, and a missing or conflicting fact is a failed premise. workOrder.consequences is what a rule requires of this change. workOrder.premises is what to confirm before building.',
     });
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,

@@ -412,7 +412,8 @@ test('draft-work-order can return the stored draft as markdown', async () => {
 test('the draft prompt keeps source facts and leaves rules out of the draft', () => {
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule in the summary, the acceptance, or the constraints, including a paraphrase.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A consequence of a loaded rule goes in consequences');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('If the source names a file this repo has no home for, name the module README, or the pull request body when no module is named.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a file name the source shows as an existing file.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('When the source asks the change to write a record into a file that is not in the repo paths, name the module README, or the pull request body when no module is named.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('ifFalse is stop when that claim is the point of the work, and omit when the rest can proceed without it.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('human-verified, not agent-verified');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A test that runs in the checkout stays unmarked.');
@@ -499,10 +500,11 @@ test('read by id keeps consequences and premises', async () => {
   expect(result.response).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
 });
 
-test('read by id rejects a premise with no outcome', async () => {
+test('read by id treats an unrecognized premise outcome as stop and ask', async () => {
   const result = await readWorkOrder({
     project: 'acme',
     draftId: storedDraft.draftId,
+    format: 'markdown',
     get: jest.fn().mockResolvedValue({
       ...storedDraft,
       workOrder: {
@@ -510,9 +512,10 @@ test('read by id rejects a premise with no outcome', async () => {
         premises: [{ claim: 'Eight monitors expose both thresholds', ifFalse: 'ask' }],
       },
     }),
-    loadDecisions: jest.fn(),
+    loadDecisions: jest.fn().mockResolvedValue([]),
   });
-  expect(result).toEqual({ response: 'The stored draft could not be read.', status: 'error' });
+  expect(result.status).toBe('success');
+  expect(result.response).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
 });
 
 test('read by id misses a draft that is not stored', async () => {

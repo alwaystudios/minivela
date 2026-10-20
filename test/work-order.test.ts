@@ -145,6 +145,11 @@ Add CSV export in acme/web.
 
 ${RULE_PRECEDENCE}
 
+In the files this change writes:
+
+- Comment every function
+- CSV only
+
 ## Constraints
 
 - Match existing patterns in acme/web.
@@ -309,6 +314,7 @@ test('a rule consequence stays next to the files and a premise says what a miss 
         { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
         { claim: 'A pool metric exists.', ifFalse: 'omit' },
         { claim: 'Skipped', ifFalse: 'ask' },
+        { claim: 'Logs are in Datadog' },
       ],
     }),
     {
@@ -341,6 +347,8 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   expect(parsed.workOrder.premises).toEqual([
     { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
     { claim: 'A pool metric exists.', ifFalse: 'omit' },
+    { claim: 'Skipped', ifFalse: 'stop' },
+    { claim: 'Logs are in Datadog', ifFalse: 'stop' },
   ]);
   const markdown = formatDraftMarkdown({
     project: 'acme',
@@ -357,7 +365,9 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   expect(markdown).toContain('## Verify before building');
   expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
   expect(markdown).toContain('- A pool metric exists. If this is false, omit it and say so in the pull request.');
-  expect(markdown).not.toContain('Skipped');
+  expect(markdown).toContain('- Skipped. If this is false, stop and ask.');
+  expect(markdown).toContain('- Logs are in Datadog. If this is false, stop and ask.');
+  expect(markdown).not.toContain('- Comments stay free of tickets and vendors');
   expect(markdown).toContain('- Query path covered by a test.');
   expect(markdown).toContain('- The export page offers CSV. human-verified, not agent-verified');
   expect(markdown).not.toMatch(/Query path covered by a test\..*human-verified/);

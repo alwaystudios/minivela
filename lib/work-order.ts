@@ -8,7 +8,7 @@ export type WorkOrderRepo = {
 };
 
 export const RULE_PRECEDENCE =
-  'Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints. Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent is a failed premise. Do not invent a replacement or copy the repo.';
+  'Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent, or a different value in the repo for a fact this order names, is a failed premise. Do not invent a replacement or copy the repo. A count, metric, log backend, or filename with no outcome means stop and ask. An acceptance line that needs a running environment, credentials, a third-party page, or production data is human-verified, even when the line does not say so. A test that runs in the checkout stays for the agent. Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints.';
 
 export type PremiseIfFalse = 'stop' | 'omit';
 
@@ -70,8 +70,9 @@ export function formatDraftMarkdown(
   ];
   lines.push('', workOrder.rulePrecedence);
   const consequences = workOrder.consequences ?? [];
-  if (consequences.length > 0) {
-    lines.push('', 'In the files this change writes:', '', ...consequences.map((line) => `- ${oneLine(line)}`));
+  const fileLines = consequences.length > 0 ? consequences : ruleTitles(workOrder.rules);
+  if (fileLines.length > 0) {
+    lines.push('', 'In the files this change writes:', '', ...fileLines.map((line) => `- ${oneLine(line)}`));
   }
   const premises = workOrder.premises ?? [];
   if (premises.length > 0) {
@@ -153,12 +154,19 @@ export function parseDraftModelText(
   return { ok: true, workOrder, citations };
 }
 
+function ruleTitles(rules: Rule[]): string[] {
+  return rules.flatMap((rule) => {
+    const title = rule.title.trim();
+    return title ? [title] : [];
+  });
+}
+
 function premiseLine(premise: WorkOrderPremise): string {
   const claim = oneLine(premise.claim).replace(/[.?!]+$/, '');
   const outcome =
-    premise.ifFalse === 'stop'
-      ? 'If this is false, stop and ask.'
-      : 'If this is false, omit it and say so in the pull request.';
+    premise.ifFalse === 'omit'
+      ? 'If this is false, omit it and say so in the pull request.'
+      : 'If this is false, stop and ask.';
   return `- ${claim}. ${outcome}`;
 }
 
@@ -777,11 +785,11 @@ function parsePremises(value: unknown): WorkOrderPremise[] {
       continue;
     }
     const claim = nonEmptyString((item as { claim?: unknown }).claim);
-    const ifFalse = (item as { ifFalse?: unknown }).ifFalse;
-    if (!claim || (ifFalse !== 'stop' && ifFalse !== 'omit')) {
+    if (!claim) {
       continue;
     }
-    premises.push({ claim, ifFalse });
+    const ifFalse = (item as { ifFalse?: unknown }).ifFalse;
+    premises.push({ claim, ifFalse: ifFalse === 'omit' ? 'omit' : 'stop' });
   }
   return premises;
 }
