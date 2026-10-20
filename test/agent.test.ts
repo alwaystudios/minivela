@@ -410,7 +410,8 @@ test('draft-work-order can return the stored draft as markdown', async () => {
 });
 
 test('the draft prompt keeps source facts and leaves rules out of the draft', () => {
-  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule in the summary, the acceptance, or the constraints, including a paraphrase.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Do not copy or restate a loaded rule in the summary or the constraints, including a paraphrase.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('An acceptance line copied from the source stays even when it shares words with a rule.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A consequence of a loaded rule goes in consequences');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a file name the source shows as an existing file.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When the source asks the change to write a record into a file that is not in the repo paths, name the module README, or the pull request body when no module is named.');
@@ -421,12 +422,15 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not invent how the change is made.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('If it names none, infer the target from the repo map.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A ticket with more than one step is one work order.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('An exclusion on the first step does not replace a later step that changes that same path.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Keep an exclusion that limits the first step, and also keep the later step that changes that same path.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Work that does not block the first step stays in the order when it is in scope or in acceptance.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy every acceptance line from the source into acceptance.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a risk that sets the order of the work into the summary.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('If two parts of the scope name different repos, name both as targets.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('When the source does not choose which path, add a premise with ifFalse stop.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('When part of the scope names no repo, infer that part from the repo map and include it when it is a different target.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('When the source does not choose which path, add a premise that names the step which uses it, with ifFalse stop.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('Every other step stays in the summary and does not wait on that premise.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('intent names the whole ticket in one line, not the first step.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not hedge a path.');
 });
 

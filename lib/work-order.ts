@@ -300,7 +300,10 @@ function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: str
     const next = withoutUngroundedPhrases(line, sourceWords);
     return next ? [next] : [];
   });
-  const acceptance = readable.acceptance.flatMap((line) => {
+  const acceptance = workOrder.acceptance.flatMap((line) => {
+    if (restatesRule(line, workOrder.rules) && !lineFromSource(line, sourceWords)) {
+      return [];
+    }
     const next = withoutUngroundedPhrases(line, sourceWords);
     return next ? [next] : [];
   });
@@ -502,10 +505,7 @@ function withoutRestatedRules(workOrder: WorkOrder): { summary: string; constrai
       const kept = bulletWithoutRules(line, workOrder.rules);
       return kept ? [kept] : [];
     }),
-    acceptance: workOrder.acceptance.flatMap((line) => {
-      const kept = bulletWithoutRules(line, workOrder.rules);
-      return kept ? [kept] : [];
-    }),
+    acceptance: workOrder.acceptance,
   };
 }
 
@@ -688,6 +688,15 @@ function groundingSource(input: { prompt?: string; project: string }, repos: Wor
   return [input.prompt ?? '', input.project, ...repos.flatMap((repo) => [repo.owner, repo.repo, ...(repo.paths ?? [])])].join(
     '\n',
   );
+}
+
+function lineFromSource(line: string, sourceWords: Set<string>): boolean {
+  const lineWords = words(line);
+  if (lineWords.length === 0) {
+    return false;
+  }
+  const shared = lineWords.filter((word) => sourceWords.has(word));
+  return shared.length / lineWords.length >= 0.6;
 }
 
 function restatesRule(constraint: string, rules: Rule[]): boolean {

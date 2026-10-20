@@ -292,7 +292,7 @@ test('markdown leaves out a constraint that restates a rule and cites the decisi
   expect(markdown).not.toContain('Do not widen any auth');
   expect(markdown).not.toContain('No secrets, tokens, or real PII in code, fixtures');
   expect(markdown).not.toContain('Do not embed secrets, tokens, or real PII');
-  expect(markdown).not.toContain('No unrelated code or dependencies');
+  expect(markdown).toContain('- No unrelated code or dependencies are changed in the same diff.');
   expect(markdown).not.toContain('Keep functions and variable names');
   expect(markdown).toContain('### Do not silently widen auth, tenancy, or public API.');
   expect(markdown).toContain('quote: Excel is out of scope.');
@@ -569,6 +569,19 @@ test('a short rule paraphrase drops and a job line stays', () => {
   ]);
 });
 
+test('an acceptance line from the source stays even when it shares a rule’s words', () => {
+  const fromSource = 'Do not refactor unrelated code in the same change.';
+  const invented = 'Prefer small reviewable diffs with no drive-by refactors.';
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: `Update the libraries. ${fromSource}`,
+    acceptance: [fromSource, invented],
+    rules: [smallDiffs],
+  });
+  expect(kept.acceptance).toContain(fromSource);
+  expect(kept.acceptance).not.toContain(invented);
+});
+
 test('a path that starts with a dot keeps the space in front of it', () => {
   const drafted = draftOf({
     summary:
@@ -630,6 +643,7 @@ function draftOf(input: {
   summary: string;
   prompt: string;
   constraints?: string[];
+  acceptance?: string[];
   rules?: Array<{ project: string; ruleId: string; title: string; body: string }>;
   decisions?: Array<{ decisionId: string; content?: string; quote?: string }>;
 }) {
@@ -639,7 +653,7 @@ function draftOf(input: {
       summary: input.summary,
       repos: [{ owner: 'acme', repo: 'web' }],
       constraints: input.constraints ?? ['Only change the export path.'],
-      acceptance: ['The export page offers CSV.'],
+      acceptance: input.acceptance ?? ['The export page offers CSV.'],
     }),
     {
       project: 'acme',
