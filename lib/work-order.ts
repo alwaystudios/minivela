@@ -150,6 +150,7 @@ export function parseDraftModelText(
     },
     groundingSource(input, repos),
     input.prompt ?? '',
+    acceptanceWords(input, repos),
   );
   return { ok: true, workOrder, citations };
 }
@@ -292,7 +293,12 @@ const RULE_WORD_STOP = new Set([
   'part',
 ]);
 
-function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: string): WorkOrder {
+function retainDraftFacts(
+  workOrder: WorkOrder,
+  source: string,
+  anchorsFrom: string,
+  acceptanceSource: Set<string>,
+): WorkOrder {
   const readable = withoutRestatedRules(workOrder);
   const sourceWords = new Set(words(source));
   const summaryText = withoutUngroundedPhrases(readable.summary || workOrder.summary, sourceWords);
@@ -301,10 +307,11 @@ function retainDraftFacts(workOrder: WorkOrder, source: string, anchorsFrom: str
     return next ? [next] : [];
   });
   const acceptance = workOrder.acceptance.flatMap((line) => {
-    if (restatesRule(line, workOrder.rules) && !lineFromSource(line, sourceWords)) {
+    const kept = acceptanceLine(line, workOrder.rules, acceptanceSource);
+    if (!kept) {
       return [];
     }
-    const next = withoutUngroundedPhrases(line, sourceWords);
+    const next = withoutUngroundedPhrases(kept, acceptanceSource);
     return next ? [next] : [];
   });
   const summary = appendMissingAnchors(
@@ -688,6 +695,45 @@ function groundingSource(input: { prompt?: string; project: string }, repos: Wor
   return [input.prompt ?? '', input.project, ...repos.flatMap((repo) => [repo.owner, repo.repo, ...(repo.paths ?? [])])].join(
     '\n',
   );
+}
+
+function acceptanceWords(
+  input: {
+    prompt?: string;
+    project: string;
+    decisions: Array<{ title?: string; content?: string; quote?: string }>;
+    chunks: Array<{ text?: string }>;
+  },
+  repos: WorkOrderRepo[],
+): Set<string> {
+  return new Set(
+    words(
+      [
+        groundingSource(input, repos),
+        ...input.decisions.flatMap((decision) => [decision.title ?? '', decision.content ?? '', decision.quote ?? '']),
+        ...input.chunks.map((chunk) => chunk.text ?? ''),
+      ].join('\n'),
+    ),
+  );
+}
+
+function acceptanceLine(line: string, rules: Rule[], sourceWords: Set<string>): string | undefined {
+  const parts = line
+    .split(/\s*(?:—|;)\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const fromSource = (part: string) => !restatesRule(part, rules) || lineFromSource(part, sourceWords);
+  if (parts.length < 2) {
+    return fromSource(line) ? line : undefined;
+  }
+  const kept = parts.filter(fromSource);
+  if (kept.length === 0 || (kept.length === parts.length && restatesRule(line, rules) && !lineFromSource(line, sourceWords))) {
+    return undefined;
+  }
+  if (kept.length === parts.length) {
+    return line;
+  }
+  return kept.join('; ');
 }
 
 function lineFromSource(line: string, sourceWords: Set<string>): boolean {

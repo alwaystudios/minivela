@@ -582,6 +582,32 @@ test('an acceptance line from the source stays even when it shares a rule’s wo
   expect(kept.acceptance).not.toContain(invented);
 });
 
+test('a mixed acceptance line keeps the job clause and drops the rule clause', () => {
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: 'Update the libraries. The export page offers CSV.',
+    acceptance: [
+      'The export page offers CSV — Prefer small, reviewable diffs. Do not refactor unrelated code in the same change.',
+    ],
+    rules: [smallDiffs],
+  });
+  expect(kept.acceptance).toEqual(['The export page offers CSV']);
+});
+
+test('an acceptance line copied from a document stays when it shares a rule’s words', () => {
+  const fromDocument = 'Do not refactor unrelated code in the same change.';
+  const invented = 'Prefer small reviewable diffs with no drive-by refactors.';
+  const kept = draftOf({
+    summary: 'Update the libraries.',
+    prompt: 'Update the libraries.',
+    acceptance: [fromDocument, invented],
+    rules: [smallDiffs],
+    chunks: [{ text: fromDocument }],
+  });
+  expect(kept.acceptance).toContain(fromDocument);
+  expect(kept.acceptance).not.toContain(invented);
+});
+
 test('a path that starts with a dot keeps the space in front of it', () => {
   const drafted = draftOf({
     summary:
@@ -646,6 +672,7 @@ function draftOf(input: {
   acceptance?: string[];
   rules?: Array<{ project: string; ruleId: string; title: string; body: string }>;
   decisions?: Array<{ decisionId: string; content?: string; quote?: string }>;
+  chunks?: Array<{ text?: string }>;
 }) {
   const parsed = parseDraftModelText(
     JSON.stringify({
@@ -660,7 +687,7 @@ function draftOf(input: {
       prompt: input.prompt,
       repos: [web],
       decisions: input.decisions ?? [],
-      chunks: [],
+      chunks: input.chunks ?? [],
       rules: input.rules ?? [],
     },
   );
