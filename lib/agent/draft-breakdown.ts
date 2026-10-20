@@ -78,6 +78,7 @@ export async function draftBreakdown(input: {
   }
   const parsed = parseBreakdownReply(reply.text);
   if (parsed.kind === 'unparsed') {
+    console.error(reply.text);
     return { response: UNPARSED, status: 'error' };
   }
   const rows =
@@ -97,7 +98,7 @@ export async function draftBreakdown(input: {
 }
 
 export const BREAKDOWN_SYSTEM_PROMPT =
-  'You draft a Jira epic and its stories from one page. Return JSON only, not the combined document. If you can split the page, return {"epic":"# Epic","stories":["# Story"]}. Each value is one ticket in markdown and starts with a heading. stories may be an empty array. There is no story-count cap. If you can read the page but cannot split it, return {"reasons":"why"}. That is a finished refusal. Use only the page, the template, the decisions, the other documents, and the repos provided. A knowledge-base chunk of this same page is not the page. Decisions overrule the page. Project decisions beat global decisions. Repo names come from the repo map only. Do not invent a repo. A module path in a story is a claim taken from the page, a decision, or a repo summary. Each ticket says the repo was not opened. Do not open a repo. When a template is provided, fill that one template for the epic and for every story. The body is the filled ticket. When no template is provided, follow ordinary Jira practice. Do not invent a template.';
+  'You draft a Jira epic and its stories from one page. Return JSON only, not the combined document. If you can split the page, return {"epic":"# Epic","stories":["# Story"]}. Each value is one ticket in markdown and starts with a heading. stories may be an empty array. There is no story-count cap. If you can read the page but cannot split it, return {"reasons":"why"}. That is a finished refusal. Use only the page, the template, the decisions, the other documents, and the repos provided. A knowledge-base chunk of this same page is not the page. Decisions overrule the page. Project decisions beat global decisions. Repo names come from the repo map only. Do not invent a repo. A module path in a story is a claim taken from the page, a decision, or a repo summary. Each ticket says the repo was not opened. Do not open a repo. When a template is provided, fill that one template for the epic and for every story. The body is the filled ticket. When no template is provided, follow ordinary Jira practice. Do not invent an issue key. The heading is the ticket title. Do not invent a template.';
 
 async function loadTemplate(input: {
   project: string;
@@ -219,11 +220,57 @@ function parseJsonObject(text: string): unknown {
   if (start === -1 || end <= start) {
     return undefined;
   }
+  const slice = raw.slice(start, end + 1);
+  return parseJsonText(slice) ?? parseJsonText(escapeInteriorQuotes(slice));
+}
+
+function parseJsonText(text: string): unknown {
   try {
-    return JSON.parse(raw.slice(start, end + 1)) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return undefined;
   }
+}
+
+function escapeInteriorQuotes(text: string): string {
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (!inString) {
+      result += char;
+      if (char === '"') {
+        inString = true;
+      }
+      continue;
+    }
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      result += char;
+      escaped = true;
+      continue;
+    }
+    if (char !== '"') {
+      result += char;
+      continue;
+    }
+    if (closesJsonString(text.slice(index + 1))) {
+      result += char;
+      inString = false;
+      continue;
+    }
+    result += '\\"';
+  }
+  return result;
+}
+
+function closesJsonString(rest: string): boolean {
+  return /^\s*:/.test(rest) || /^\s*[}\]]/.test(rest) || /^\s*,\s*"(?:stories"|reasons"|#)/.test(rest);
 }
 
 function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {

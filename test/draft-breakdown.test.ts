@@ -47,6 +47,7 @@ test('the prompt keeps repo names on the map and follows ordinary Jira practice'
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('A module path in a story is a claim taken from the page, a decision, or a repo summary.');
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('Each ticket says the repo was not opened.');
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('follow ordinary Jira practice');
+  expect(BREAKDOWN_SYSTEM_PROMPT).toContain('Do not invent an issue key. The heading is the ticket title.');
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain('There is no story-count cap.');
   expect(BREAKDOWN_SYSTEM_PROMPT).not.toContain('Rules apply');
   expect(BREAKDOWN_SYSTEM_PROMPT).not.toContain('the rules');
@@ -261,12 +262,39 @@ test('a literal copy of the split example is stored', async () => {
   ]);
 });
 
-test('a reply that does not parse writes no rows', async () => {
+test('a reply that does not parse writes no rows and logs the model text', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
   const { ready, put } = draft({
     complete: async () => ({ text: 'not json', cutOff: false }),
   });
   await expect(ready).resolves.toEqual({ response: 'The model reply could not be parsed.', status: 'error' });
   expect(put).not.toHaveBeenCalled();
+  expect(error).toHaveBeenCalledWith('not json');
+  error.mockRestore();
+});
+
+test('quotation marks inside a ticket are stored', async () => {
+  const text = [
+    '```json',
+    '{',
+    '  "epic": "# Bill the meter\\n\\nAnswer "what have we got?", "who owns it?".",',
+    '  "stories": [',
+    '    "# Show the tariff\\n\\nSay "hello"."',
+    '  ]',
+    '}',
+    '```',
+  ].join('\n');
+  const { ready, put } = draft({
+    complete: async () => ({ text, cutOff: false }),
+  });
+  await expect(ready).resolves.toMatchObject({ status: 'success' });
+  expect(put).toHaveBeenCalledWith([
+    expect.objectContaining({
+      kind: 'epic',
+      body: '# Bill the meter\n\nAnswer "what have we got?", "who owns it?".',
+    }),
+    expect.objectContaining({ kind: 'story', body: '# Show the tariff\n\nSay "hello".' }),
+  ]);
 });
 
 test('a stored story keeps the markdown the model returned', async () => {
