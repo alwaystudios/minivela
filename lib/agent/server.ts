@@ -25,10 +25,11 @@ import {
   type RetrievedDecision,
   type ScoredDecision,
 } from '../search-decisions.js';
-import { breakdownQueryInput, readBreakdown } from '../breakdown.js';
+import { breakdownQueryInput, readBreakdown, type BreakdownRow } from '../breakdown.js';
 import type { DraftWrite } from '../work-order.js';
 import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
+import { BREAKDOWN_SYSTEM_PROMPT, draftBreakdown, TICKET_TEMPLATE_ID } from './draft-breakdown.js';
 import { draftWorkOrder, DRAFT_SYSTEM_PROMPT, readWorkOrder } from './draft.js';
 import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
 
@@ -114,14 +115,18 @@ async function searchOne(project: string, embedding: number[]): Promise<ScoredDe
   return scoredDecisionsFromSearchResults(result.SearchResults);
 }
 
+async function searchDecisionsStrict(query: { prompt: string; project: string }): Promise<RetrievedDecision[]> {
+  const embedding = await embedText(bedrock, query.prompt);
+  return searchDecisionsAcrossProjects({
+    project: query.project,
+    embedding,
+    searchOne,
+  });
+}
+
 async function searchDecisions(query: { prompt: string; project: string }): Promise<RetrievedDecision[]> {
   try {
-    const embedding = await embedText(bedrock, query.prompt);
-    return await searchDecisionsAcrossProjects({
-      project: query.project,
-      embedding,
-      searchOne,
-    });
+    return await searchDecisionsStrict(query);
   } catch (error) {
     console.error(error);
     return [];
@@ -334,6 +339,91 @@ async function completeDraft(query: {
   return text;
 }
 
+async function completeBreakdown(query: {
+  project: string;
+  page: string;
+  pageText: string;
+  chunks: RetrievedChunk[];
+  decisions: RetrievedDecision[];
+  rules: Rule[];
+  repos: Repo[];
+  template?: string;
+}): Promise<{ text: string; cutOff: boolean }> {
+  const templateContext = query.template ?? '(no template; follow ordinary Jira practice)';
+  const rulesContext =
+    query.rules.length === 0
+      ? '(no rules loaded)'
+      : query.rules
+          .map((rule, index) => `${index + 1}. rule ${rule.ruleId} project=${rule.project}\n${rule.title}\n${rule.body}`)
+          .join('\n\n');
+  const reposContext = query.repos
+    .map((repo, index) => `${index + 1}. ${repo.owner}/${repo.repo} url=${repo.url}\n${repo.summary}`)
+    .join('\n\n');
+  const decisionsContext =
+    query.decisions.length === 0
+      ? '(no decisions)'
+      : query.decisions
+          .map(
+            (decision, index) =>
+              `${index + 1}. decision ${decision.decisionId} project=${decision.project} loggedAt=${decision.loggedAt} timestamp=${decision.timestamp} source=${decision.sourceKey}\n${decision.title}\n${decision.content}\nquote: ${decision.quote}`,
+          )
+          .join('\n\n');
+  const documentsContext =
+    query.chunks.length === 0
+      ? '(no documents)'
+      : query.chunks.map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`).join('\n\n');
+  const response = await bedrock.send(
+    new InvokeModelCommand({
+      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      contentType: 'application/json',
+      accept: 'application/json',
+      body: JSON.stringify({
+        anthropic_version: 'bedrock-2023-05-31',
+        max_tokens: 8192,
+        system: BREAKDOWN_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: `project: ${query.project}\npage: ${query.page}\n\ntemplate:\n${templateContext}\n\npage text:\n${query.pageText}\n\nrules:\n${rulesContext}\n\nrepos:\n${reposContext}\n\ndecisions:\n${decisionsContext}\n\ndocuments:\n${documentsContext}`,
+          },
+        ],
+      }),
+    }),
+  );
+  const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
+    stop_reason?: string;
+    content?: Array<{ text?: string }>;
+  };
+  const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
+  const cutOff = payload.stop_reason === 'max_tokens';
+  if (!text && !cutOff) {
+    throw new Error('breakdown model returned no text');
+  }
+  return { text, cutOff };
+}
+
+async function loadTicketTemplate(project: string): Promise<string | undefined> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: requiredEnv('TEMPLATES_TABLE_NAME'),
+      Key: { project, templateId: TICKET_TEMPLATE_ID },
+    }),
+  );
+  const body = result.Item?.body;
+  return typeof body === 'string' ? body : undefined;
+}
+
+async function putBreakdowns(rows: BreakdownRow[]): Promise<void> {
+  for (const item of rows) {
+    await docClient.send(
+      new PutCommand({
+        TableName: requiredEnv('BREAKDOWNS_TABLE_NAME'),
+        Item: item,
+      }),
+    );
+  }
+}
+
 async function putDraft(item: DraftWrite): Promise<void> {
   await docClient.send(
     new PutCommand({
@@ -402,6 +492,24 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
       project: parsedPayload.project,
       breakdownId: parsedPayload.breakdownId,
       query: queryBreakdown,
+    });
+    json(res, 200, result);
+    return;
+  }
+  if ('page' in parsedPayload) {
+    const result = await draftBreakdown({
+      project: parsedPayload.project,
+      page: parsedPayload.page,
+      readPage: readDocumentsObject,
+      retrieve,
+      searchDecisions: searchDecisionsStrict,
+      loadRules,
+      loadRepos,
+      loadTemplate: loadTicketTemplate,
+      complete: completeBreakdown,
+      put: putBreakdowns,
+      breakdownId: randomUUID(),
+      createdAt: new Date().toISOString(),
     });
     json(res, 200, result);
     return;

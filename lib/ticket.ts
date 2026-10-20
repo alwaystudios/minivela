@@ -8,6 +8,10 @@ export function ticketObjectKey(project: string, ticket: string): string {
   return `${project}/jira/${ticket}.md`;
 }
 
+export function isDocumentsPageKey(project: string, page: string): boolean {
+  return page.startsWith(`${project}/`) && page.endsWith('.md') && !page.includes('..');
+}
+
 export function promptForInvoke(prompt: string | undefined, ticketText: string | undefined): string {
   const question = prompt?.trim() ?? '';
   if (question) {

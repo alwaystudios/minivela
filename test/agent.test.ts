@@ -114,7 +114,7 @@ test('a fetch rejects a prompt or a skill', () => {
       draftId: 'draft-1',
     }),
   ).toEqual({
-    response: 'draftId fetches a stored draft. Omit prompt, skill, and ticket.',
+    response: 'draftId fetches a stored draft. Omit prompt, skill, page, and ticket.',
     status: 'error',
   });
 });
@@ -179,7 +179,48 @@ test('a ticket read returns the whole markdown object', async () => {
 
 test('an unknown skill is rejected', () => {
   expect(parseInvokePayload({ prompt: 'add CSV export', project: 'acme', skill: 'draft' })).toEqual({
-    response: 'skill must be check-readiness or draft-work-order when set.',
+    response: 'skill must be check-readiness, draft-work-order, or draft-breakdown when set.',
+    status: 'error',
+  });
+});
+
+test('draft-breakdown reads one page in the project', () => {
+  expect(
+    parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.md', skill: 'draft-breakdown' }),
+  ).toEqual({
+    project: 'acme',
+    skill: 'draft-breakdown',
+    page: 'acme/notes/billing.md',
+  });
+  expect(parseInvokePayload({ project: 'acme', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'other/notes/billing.md', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/../notes/billing.md', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.txt', skill: 'draft-breakdown' })).toEqual({
+    response: 'Name a page in this project.',
+    status: 'error',
+  });
+  expect(
+    parseInvokePayload({
+      project: 'acme',
+      page: 'acme/notes/billing.md',
+      skill: 'draft-breakdown',
+      prompt: 'split this',
+    }),
+  ).toEqual({
+    response: 'draft-breakdown reads one page. Omit prompt, ticket, draftId, breakdownId, and format.',
+    status: 'error',
+  });
+  expect(parseInvokePayload({ project: 'acme', page: 'acme/notes/billing.md', prompt: 'split this' })).toEqual({
+    response: 'page is only valid with skill draft-breakdown.',
     status: 'error',
   });
 });
