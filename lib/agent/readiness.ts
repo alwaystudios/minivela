@@ -24,11 +24,23 @@ export async function checkReadiness(input: {
     console.error(error);
     return [];
   });
-  const reposPromise = input.loadRepos(input.project).catch((error) => {
-    console.error(error);
-    return [];
-  });
-  const [chunks, decisions, repos] = await Promise.all([chunksPromise, decisionsPromise, reposPromise]);
+  const reposPromise = input.loadRepos(input.project);
+  const [chunks, decisions, reposOutcome] = await Promise.all([
+    chunksPromise,
+    decisionsPromise,
+    reposPromise.then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    ),
+  ]);
+  if (!reposOutcome.ok) {
+    console.error(reposOutcome.error);
+    return { response: 'The repo map failed to load.', status: 'refused' };
+  }
+  const repos = reposOutcome.value;
+  if (repos.length === 0) {
+    return { response: 'The repo map is empty.', status: 'refused' };
+  }
   const response = await input.complete({
     prompt: input.prompt,
     project: input.project,

@@ -330,6 +330,39 @@ test('check-readiness loads repos, decisions, and documents', async () => {
   expect(result.status).toBe('success');
 });
 
+test('check-readiness stops when the repo map is empty', async () => {
+  const complete = jest.fn();
+  const result = await checkReadiness({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([]),
+    complete,
+  });
+  expect(complete).not.toHaveBeenCalled();
+  expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+});
+
+test('check-readiness stops when the repo map fails to load', async () => {
+  const complete = jest.fn();
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await checkReadiness({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
+      complete,
+    });
+    expect(complete).not.toHaveBeenCalled();
+    expect(result).toEqual({ response: 'The repo map failed to load.', status: 'refused' });
+  } finally {
+    error.mockRestore();
+  }
+});
+
 const webRepo = {
   project: 'acme',
   repoId: 'acme/web',
@@ -675,6 +708,51 @@ test('draft-work-order does not store a repo that is not in the map', async () =
   });
 });
 
+test('draft-work-order stops when the repo map is empty', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const complete = jest.fn();
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([]),
+    complete,
+    put,
+    draftId: 'draft-empty-map',
+    createdAt: '2026-10-15T21:00:00.000Z',
+  });
+  expect(complete).not.toHaveBeenCalled();
+  expect(put).not.toHaveBeenCalled();
+  expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+});
+
+test('draft-work-order stops when the repo map fails to load', async () => {
+  const put = jest.fn().mockResolvedValue(undefined);
+  const complete = jest.fn();
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await draftWorkOrder({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRules: jest.fn().mockResolvedValue([]),
+      loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
+      complete,
+      put,
+      draftId: 'draft-map-failed',
+      createdAt: '2026-10-15T21:00:00.000Z',
+    });
+    expect(complete).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+    expect(result).toEqual({ response: 'The repo map failed to load.', status: 'refused' });
+  } finally {
+    error.mockRestore();
+  }
+});
+
 test('draft-work-order does not store when the model is blocked', async () => {
   const put = jest.fn().mockResolvedValue(undefined);
   const result = await draftWorkOrder({
@@ -683,7 +761,7 @@ test('draft-work-order does not store when the model is blocked', async () => {
     retrieve: jest.fn().mockResolvedValue([]),
     searchDecisions: jest.fn().mockResolvedValue([]),
     loadRules: jest.fn().mockResolvedValue([]),
-    loadRepos: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(JSON.stringify({ blocked: 'No target repo exists.' })),
     put,
     draftId: 'draft-3',
