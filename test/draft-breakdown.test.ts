@@ -1,4 +1,4 @@
-import { BREAKDOWN_SYSTEM_PROMPT, draftBreakdown } from '../lib/agent/draft-breakdown.js';
+import { BREAKDOWN_SYSTEM_PROMPT, breakdownSearchQuery, draftBreakdown } from '../lib/agent/draft-breakdown.js';
 import type { Repo, Rule } from '../lib/lookup.js';
 
 const createdAt = '2026-10-20T18:00:00.000Z';
@@ -115,24 +115,38 @@ test('a failed repo query stores one refusal and does not call the model', async
   expect(complete).not.toHaveBeenCalled();
 });
 
-test('a failed decision search stores one refusal and does not call the model', async () => {
-  const { ready, complete } = draft({
+test('a failed decision search stores nothing and does not call the model', async () => {
+  const { ready, put, complete } = draft({
     searchDecisions: async () => {
       throw new Error('search failed');
     },
   });
-  await expect(ready).resolves.toMatchObject({
-    response: expect.stringContaining('Decision search failed.'),
-    status: 'refused',
-  });
+  await expect(ready).resolves.toEqual({ response: 'Decision search failed.', status: 'error' });
+  expect(put).not.toHaveBeenCalled();
   expect(complete).not.toHaveBeenCalled();
+});
+
+test('a failed document search stores nothing and does not call the model', async () => {
+  const { ready, put, complete } = draft({
+    retrieve: async () => {
+      throw new Error('retrieve failed');
+    },
+  });
+  await expect(ready).resolves.toEqual({ response: 'Document search failed.', status: 'error' });
+  expect(put).not.toHaveBeenCalled();
+  expect(complete).not.toHaveBeenCalled();
+});
+
+test('search uses the heading, or the first line when the page has none', () => {
+  expect(breakdownSearchQuery(pageText)).toBe('Bill the new meter');
+  expect(breakdownSearchQuery('Show the tariff.\n\nThen record it.\n')).toBe('Show the tariff.');
 });
 
 test('an empty decision search still drafts', async () => {
   const searchDecisions = jest.fn().mockResolvedValue([]);
   const { ready, complete } = draft({ searchDecisions });
   await expect(ready).resolves.toMatchObject({ status: 'success' });
-  expect(searchDecisions).toHaveBeenCalledWith({ prompt: pageText, project: 'acme' });
+  expect(searchDecisions).toHaveBeenCalledWith({ prompt: 'Bill the new meter', project: 'acme' });
   expect(complete).toHaveBeenCalledWith(expect.objectContaining({ decisions: [], pageText }));
 });
 
@@ -190,7 +204,7 @@ test('a drafted epic and its stories are stored in ordinal order', async () => {
     ].join('\n'),
     status: 'success',
   });
-  expect(retrieve).toHaveBeenCalledWith({ prompt: pageText, project: 'acme' });
+  expect(retrieve).toHaveBeenCalledWith({ prompt: 'Bill the new meter', project: 'acme' });
   expect(put).toHaveBeenCalledWith([
     expect.objectContaining({
       ticketId: 'bd-1#0',

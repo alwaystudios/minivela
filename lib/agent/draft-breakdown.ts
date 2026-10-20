@@ -7,6 +7,8 @@ export const TICKET_TEMPLATE_ID = 'ticket';
 
 const CUT_OFF = 'The model reply was cut off.';
 const UNPARSED = 'The model reply could not be parsed.';
+const DECISION_SEARCH_FAILED = 'Decision search failed.';
+const DOCUMENT_SEARCH_FAILED = 'Document search failed.';
 
 export async function draftBreakdown(input: {
   project: string;
@@ -38,11 +40,12 @@ export async function draftBreakdown(input: {
   if (!raw.trim()) {
     return storeRefusal(input, 'The page is empty.');
   }
+  const searchQuery = breakdownSearchQuery(raw);
   const [rulesResult, reposResult, decisionsResult, chunksResult, templateResult] = await Promise.all([
     settle(input.loadRules(input.project)),
     settle(input.loadRepos(input.project)),
-    settle(input.searchDecisions({ prompt: raw, project: input.project })),
-    settle(input.retrieve({ prompt: raw, project: input.project })),
+    settle(input.searchDecisions({ prompt: searchQuery, project: input.project })),
+    settle(input.retrieve({ prompt: searchQuery, project: input.project })),
     settle(loadTemplate(input)),
   ]);
   if (rulesResult.status === 'rejected') {
@@ -58,13 +61,14 @@ export async function draftBreakdown(input: {
   }
   if (decisionsResult.status === 'rejected') {
     console.error(decisionsResult.reason);
-    return storeRefusal(input, 'Decision search failed.');
+    return { response: DECISION_SEARCH_FAILED, status: 'error' };
+  }
+  if (chunksResult.status === 'rejected') {
+    console.error(chunksResult.reason);
+    return { response: DOCUMENT_SEARCH_FAILED, status: 'error' };
   }
   if (templateResult.status === 'rejected') {
     throw templateResult.reason;
-  }
-  if (chunksResult.status === 'rejected') {
-    throw chunksResult.reason;
   }
   const template = templateResult.value;
   const reply = await input.complete({
@@ -147,6 +151,23 @@ function row(
     return { ...shared, kind };
   }
   return { ...shared, kind, page: input.page };
+}
+
+export function breakdownSearchQuery(pageText: string): string {
+  const lines = pageText.split(/\r?\n/);
+  for (const line of lines) {
+    const heading = /^#{1,6}\s+(\S.*?)\s*#*$/.exec(line.trim());
+    if (heading) {
+      return heading[1].trim();
+    }
+  }
+  for (const line of lines) {
+    const text = line.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return pageText.trim();
 }
 
 function chunkIsPage(uri: string | undefined, page: string): boolean {
