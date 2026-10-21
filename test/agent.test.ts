@@ -499,7 +499,7 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('A consequence of a loaded rule goes in consequences');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy a file name the source shows as an existing file.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When the source asks the change to write a record into a file that is not in the repo paths, name the module README, or the pull request body when no module is named.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('ifFalse is stop when that claim is the point of the work, and omit when the rest can proceed without it.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('ifFalse is step when a folder the source names in words stops only that step, stop when that claim is the point of the work, and omit when the rest can proceed without it.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('human-verified, not agent-verified');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A test that runs in the checkout stays unmarked.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Copy repro steps, links, and named files from the source into the summary.');
@@ -520,10 +520,11 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('intent names every step in one line, including a later step and work that runs in parallel.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not hedge a path.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A folder the source names in words is not a slash path.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('The premise quotes those words and stops only that step.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('The premise quotes those words with ifFalse step.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('ifFalse step stops only that step. Other steps do not wait.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('The summary tells the agent to find that folder and match what is already there.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('A slash path for that folder is allowed only when the source or that repo\'s summary already contains it.');
-  expect(DRAFT_SYSTEM_PROMPT).toContain('A file the source names can be written as a path.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A file the source names is written as a path only when the source or that repo\'s summary already contains that path.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When a step removes a secret or input from a workflow, the summary says every caller file the source already names drops that same secret or input.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('That line is required. It is not an invented mechanism.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('When the source names no caller file, the summary tells the agent to search the named repo for callers.');
