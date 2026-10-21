@@ -10,7 +10,7 @@ export type WorkOrderRepo = {
 export const RULE_PRECEDENCE =
   'Where the code this change writes would break a rule, follow the rule. Do not widen the diff to fix other violations. On a policy conflict, the order wins. Do not stop to confirm a conflict this order already settles. A named fact that is absent, or a different value in the repo for a fact this order names, is a failed premise. Do not invent a replacement or copy the repo. A count, metric, log backend, or filename with no outcome means stop and ask. An acceptance line that needs a running environment, credentials, a third-party page, or production data is human-verified, even when the line does not say so. A test that runs in the checkout stays for the agent. Global rules always apply. A client rule may add but cannot drop a global rule. Rules override constraints.';
 
-export type PremiseIfFalse = 'stop' | 'omit';
+export type PremiseIfFalse = 'stop' | 'omit' | 'step';
 
 export type WorkOrderPremise = {
   claim: string;
@@ -171,7 +171,7 @@ function premiseLine(premise: WorkOrderPremise): string {
   const outcome =
     premise.ifFalse === 'omit'
       ? 'If this is false, omit it and say so in the pull request.'
-      : stopsOnlyItsStep(claim)
+      : premise.ifFalse === 'step' || stopsOnlyItsStep(claim)
         ? 'If this is false, stop that step and ask. Other steps do not wait.'
         : 'If this is false, stop and ask.';
   return `- ${claim}. ${outcome}`;
@@ -866,7 +866,10 @@ function parsePremises(value: unknown): WorkOrderPremise[] {
       continue;
     }
     const ifFalse = (item as { ifFalse?: unknown }).ifFalse;
-    premises.push({ claim, ifFalse: ifFalse === 'omit' ? 'omit' : 'stop' });
+    premises.push({
+      claim,
+      ifFalse: ifFalse === 'omit' ? 'omit' : ifFalse === 'step' ? 'step' : 'stop',
+    });
   }
   return premises;
 }

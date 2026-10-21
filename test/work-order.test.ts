@@ -315,6 +315,7 @@ test('a rule consequence stays next to the files and a premise says what a miss 
         { claim: 'A pool metric exists.', ifFalse: 'omit' },
         { claim: 'Skipped', ifFalse: 'ask' },
         { claim: 'Logs are in Datadog' },
+        { claim: 'the reports area', ifFalse: 'step' },
       ],
     }),
     {
@@ -355,6 +356,7 @@ test('a rule consequence stays next to the files and a premise says what a miss 
     { claim: 'A pool metric exists.', ifFalse: 'omit' },
     { claim: 'Skipped', ifFalse: 'stop' },
     { claim: 'Logs are in Datadog', ifFalse: 'stop' },
+    { claim: 'the reports area', ifFalse: 'step' },
   ]);
   const markdown = formatDraftMarkdown({
     project: 'acme',
@@ -374,6 +376,9 @@ test('a rule consequence stays next to the files and a premise says what a miss 
   expect(markdown).toContain('- A pool metric exists. If this is false, omit it and say so in the pull request.');
   expect(markdown).toContain('- Skipped. If this is false, stop and ask.');
   expect(markdown).toContain('- Logs are in Datadog. If this is false, stop and ask.');
+  expect(markdown).toContain(
+    '- the reports area. If this is false, stop that step and ask. Other steps do not wait.',
+  );
   expect(markdown).not.toContain('- Comments stay free of tickets and vendors');
   expect(markdown).toContain('- CSV only');
   expect(markdown).toContain('- Query path covered by a test.');
@@ -584,6 +589,11 @@ test('a file premise stops its step and a live check is human-verified', () => {
         acceptance: ['Environments running the agent confirmed.', 'No New Relic text remains in CLAUDE.md.'],
         premises: [
           { claim: 'apps/portal/instrumentation.ts exists', ifFalse: 'stop' },
+          { claim: 'the reports folder', ifFalse: 'stop' },
+          { claim: 'the config directory', ifFalse: 'stop' },
+          { claim: 'the reports area', ifFalse: 'step' },
+          { claim: 'the reports folders', ifFalse: 'step' },
+          { claim: 'the config directories', ifFalse: 'step' },
           { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
         ],
         rules: [],
@@ -595,6 +605,17 @@ test('a file premise stops its step and a live check is human-verified', () => {
   );
   expect(markdown).toContain(
     '- apps/portal/instrumentation.ts exists. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain('- the reports folder. If this is false, stop and ask.');
+  expect(markdown).toContain('- the config directory. If this is false, stop and ask.');
+  expect(markdown).toContain(
+    '- the reports area. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain(
+    '- the reports folders. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain(
+    '- the config directories. If this is false, stop that step and ask. Other steps do not wait.',
   );
   expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
   expect(markdown).toContain('- Environments running the agent confirmed. human-verified, not agent-verified');
