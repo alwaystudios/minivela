@@ -272,7 +272,7 @@ async function resolveTask(
   }
   const target = selectTargetRepo(stored, parsed.repo);
   if (target.ok === false) {
-    return { ok: false, status: 400, error: target.error };
+    return { ok: false, status: 200, error: target.error };
   }
   return {
     ok: true,
@@ -291,6 +291,7 @@ async function getDraftFromTable(key: { project: string; draftId: string }): Pro
     new GetCommand({
       TableName: table,
       Key: key,
+      ConsistentRead: true,
     }),
   );
   return result.Item;
@@ -308,6 +309,11 @@ async function applyWorkOrder(
   if (clone.code !== 0) {
     return failed(commandFailure('git clone', clone), { diff: '', stdout: truncate(clone.stdout) });
   }
+  const rev = await run('git', ['rev-parse', 'HEAD'], paths.workspace);
+  const base = rev.stdout.trim();
+  if (rev.code !== 0 || base.length === 0) {
+    return failed(commandFailure('git rev-parse', rev), { diff: '', stdout: truncate(rev.stdout) });
+  }
   await writeFile(paths.taskPath, task, { mode: 0o600 });
   await chmod(paths.taskPath, 0o600);
   await writeFile(paths.targetPath, `${target.owner}/${target.repo}\n`, { mode: 0o600 });
@@ -320,11 +326,17 @@ async function applyWorkOrder(
     const message = error instanceof Error ? error.message : 'goose failed';
     goose = { code: 1, stdout: '', stderr: message };
   }
-  await run('git', ['add', '-A'], paths.workspace);
-  const diff = await run('git', ['diff', '--cached'], paths.workspace);
+  const add = await run('git', ['add', '-A'], paths.workspace);
+  const diff =
+    add.code === 0
+      ? await run('git', ['diff', '--cached', base], paths.workspace)
+      : { code: add.code, stdout: '', stderr: add.stderr };
   const stdout = truncate(goose.stdout);
   if (goose.code !== 0) {
     return failed(commandFailure('goose', goose), { diff: diff.stdout, stdout });
+  }
+  if (add.code !== 0) {
+    return failed(commandFailure('git add', add), { diff: '', stdout });
   }
   if (diff.code !== 0) {
     return failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout });

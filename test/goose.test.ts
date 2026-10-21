@@ -23,6 +23,7 @@ import {
 jest.setTimeout(180_000);
 
 const HELLO = 'https://github.com/octocat/Hello-World';
+const CLONE_SHA = 'abc1234';
 
 test('accepts a stored draft', () => {
   const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
@@ -117,6 +118,9 @@ test('an invocation spawns git and goose with argument arrays and returns the di
       expect(await readFile(paths.targetPath, 'utf8')).toBe('octocat/Hello-World\n');
       return { code: 0, stdout: 'z'.repeat(STDOUT_LIMIT + 50), stderr: '' };
     }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
@@ -144,6 +148,11 @@ test('an invocation spawns git and goose with argument arrays and returns the di
 
   const clone = calls.find((call) => call.command === 'git' && call.args[0] === 'clone');
   expect(clone?.args).toEqual(['clone', '--depth', '1', HELLO, paths.workspace]);
+  expect(calls.find((call) => call.command === 'git' && call.args[0] === 'diff')?.args).toEqual([
+    'diff',
+    '--cached',
+    CLONE_SHA,
+  ]);
   const goose = calls.find((call) => call.command === 'goose');
   expect(goose?.args).toEqual(gooseArguments().slice(1));
   expect(goose?.cwd).toBe(paths.workspace);
@@ -155,6 +164,9 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
   const run: CommandRunner = async (command, args) => {
     if (command === 'goose') {
       return { code: 1, stdout: '', stderr: 'Bedrock access denied' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
     }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
@@ -187,6 +199,9 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
       expect(task).toContain('Add a Smoke line to README.md');
       expect(task).toContain('octocat/Hello-World');
       return { code: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
     }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
@@ -232,7 +247,7 @@ test('a missing draft is HTTP 200 with an error', async () => {
   }
 });
 
-test('a repo that is not on the work order is HTTP 400', async () => {
+test('a repo that is not on the work order is HTTP 200 with an error', async () => {
   const server = createGooseServer(
     async () => {
       throw new Error('should not run');
@@ -247,7 +262,7 @@ test('a repo that is not on the work order is HTTP 400', async () => {
       draftId: 'draft-1',
       repo: 'octocat/Spoon-Knife',
     });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(200);
     expect(response.body.status).toBe('error');
     expect(response.body.response?.error).toContain('work order');
   } finally {
@@ -255,7 +270,7 @@ test('a repo that is not on the work order is HTTP 400', async () => {
   }
 });
 
-test('a multi-repo order without a selector is HTTP 400', async () => {
+test('a multi-repo order without a selector is HTTP 200 with an error', async () => {
   const server = createGooseServer(
     async () => {
       throw new Error('should not run');
@@ -266,7 +281,7 @@ test('a multi-repo order without a selector is HTTP 400', async () => {
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
-    expect(response.statusCode).toBe(400);
+    expect(response.statusCode).toBe(200);
     expect(response.body.response?.error).toContain('more than one repository');
   } finally {
     await close(server);
@@ -279,6 +294,9 @@ test('a multi-repo order with a selector clones that repo', async () => {
   const calls: Array<{ command: string; args: string[] }> = [];
   const run: CommandRunner = async (command, args) => {
     calls.push({ command, args });
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
@@ -310,6 +328,9 @@ test('a multi-repo order with a selector clones that repo', async () => {
 test('an empty diff after Goose exits 0 is an error', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
   const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -324,6 +345,60 @@ test('an empty diff after Goose exits 0 is an error', async () => {
       status: 'error',
       response: { diff: '', error: 'Goose made no changes' },
     });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a Goose commit is still a change because the diff is against the clone tip', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      if (args.includes(CLONE_SHA)) {
+        return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+      }
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'success',
+      response: { diff: 'diff --git a/README.md\n' },
+    });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a git add failure is an error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'add') {
+      return { code: 1, stdout: '', stderr: 'index.lock' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body.status).toBe('error');
+    expect(response.body.response?.error).toContain('git add');
+    expect(response.body.response?.error).toContain('index.lock');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -357,6 +432,9 @@ test('while goose is running, ping is HealthyBusy', async () => {
       expect(ping.body.status).toBe('HealthyBusy');
       release();
       return { code: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
     }
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
