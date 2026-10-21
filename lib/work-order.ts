@@ -178,7 +178,7 @@ function premiseLine(premise: WorkOrderPremise): string {
 }
 
 function stopsOnlyItsStep(claim: string): boolean {
-  return /\/|\b[\w.-]+\.[a-z][a-z0-9]{0,4}\b|\bdockerfile\b/i.test(claim);
+  return /\/|\b[\w.-]+\.[a-z][a-z0-9]{0,4}\b|\bdockerfile\b|\bfolder\b|\bdirectory\b/i.test(claim);
 }
 
 function acceptanceLines(acceptance: string[]): string[] {

@@ -584,6 +584,8 @@ test('a file premise stops its step and a live check is human-verified', () => {
         acceptance: ['Environments running the agent confirmed.', 'No New Relic text remains in CLAUDE.md.'],
         premises: [
           { claim: 'apps/portal/instrumentation.ts exists', ifFalse: 'stop' },
+          { claim: 'the reports folder', ifFalse: 'stop' },
+          { claim: 'the config directory', ifFalse: 'stop' },
           { claim: 'Eight monitors expose both thresholds', ifFalse: 'stop' },
         ],
         rules: [],
@@ -595,6 +597,12 @@ test('a file premise stops its step and a live check is human-verified', () => {
   );
   expect(markdown).toContain(
     '- apps/portal/instrumentation.ts exists. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain(
+    '- the reports folder. If this is false, stop that step and ask. Other steps do not wait.',
+  );
+  expect(markdown).toContain(
+    '- the config directory. If this is false, stop that step and ask. Other steps do not wait.',
   );
   expect(markdown).toContain('- Eight monitors expose both thresholds. If this is false, stop and ask.');
   expect(markdown).toContain('- Environments running the agent confirmed. human-verified, not agent-verified');
