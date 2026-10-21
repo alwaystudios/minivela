@@ -134,9 +134,9 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'success',
-      diff: 'diff --git a/README.md\n',
+      response: { diff: 'diff --git a/README.md\n' },
     });
-    expect(response.body.stdout).toHaveLength(STDOUT_LIMIT);
+    expect(response.body.response?.stdout).toHaveLength(STDOUT_LIMIT);
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -167,9 +167,9 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(200);
     expect(response.body.status).toBe('error');
-    expect(response.body.diff).toBe('diff --git a/README.md\n');
-    expect(response.body.error).toContain('goose');
-    expect(response.body.error).toContain('Bedrock access denied');
+    expect(response.body.response?.diff).toBe('diff --git a/README.md\n');
+    expect(response.body.response?.error).toContain('goose');
+    expect(response.body.response?.error).toContain('Bedrock access denied');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -201,7 +201,10 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ status: 'success', diff: 'diff --git a/README.md\n' });
+    expect(response.body).toMatchObject({
+      status: 'success',
+      response: { diff: 'diff --git a/README.md\n' },
+    });
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -220,7 +223,10 @@ test('a missing draft is HTTP 200 with an error', async () => {
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'missing' });
     expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ status: 'error', error: 'No draft with that id.' });
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { error: 'No draft with that id.' },
+    });
   } finally {
     await close(server);
   }
@@ -243,7 +249,7 @@ test('a repo that is not on the work order is HTTP 400', async () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.body.status).toBe('error');
-    expect(response.body.error).toContain('work order');
+    expect(response.body.response?.error).toContain('work order');
   } finally {
     await close(server);
   }
@@ -261,7 +267,7 @@ test('a multi-repo order without a selector is HTTP 400', async () => {
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(400);
-    expect(response.body.error).toContain('more than one repository');
+    expect(response.body.response?.error).toContain('more than one repository');
   } finally {
     await close(server);
   }
@@ -316,8 +322,7 @@ test('an empty diff after Goose exits 0 is an error', async () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'error',
-      diff: '',
-      error: 'Goose made no changes',
+      response: { diff: '', error: 'Goose made no changes' },
     });
   } finally {
     await close(server);
@@ -511,7 +516,10 @@ function getJson(port: number, path: string): Promise<{ statusCode: number; body
 function postJson(
   port: number,
   body: unknown,
-): Promise<{ statusCode: number; body: { status?: string; diff?: string; stdout?: string; error?: string } }> {
+): Promise<{
+  statusCode: number;
+  body: { status?: string; response?: { diff?: string; stdout?: string; error?: string } };
+}> {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const req = request(
@@ -530,9 +538,7 @@ function postJson(
             statusCode: res.statusCode ?? 0,
             body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
               status?: string;
-              diff?: string;
-              stdout?: string;
-              error?: string;
+              response?: { diff?: string; stdout?: string; error?: string };
             },
           });
         });

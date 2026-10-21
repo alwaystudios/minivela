@@ -38,6 +38,19 @@ export type ParsedInvocation =
 
 export type TargetRepo = { owner: string; repo: string };
 
+export type GooseInvokeResult = {
+  status: 'success' | 'error';
+  response: { diff?: string; stdout?: string; error?: string };
+};
+
+function failed(error: string, extra?: { diff?: string; stdout?: string }): GooseInvokeResult {
+  return { status: 'error', response: { ...extra, error } };
+}
+
+function succeeded(diff: string, stdout: string): GooseInvokeResult {
+  return { status: 'success', response: { diff, stdout } };
+}
+
 export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
   return [
     'goose',
@@ -173,11 +186,11 @@ export function createGooseServer(
           await handleInvocation(req, res, run, paths, loadDraft, () => busy, setBusy);
           return;
         }
-        json(res, 404, { status: 'error', error: 'not found' });
+        json(res, 404, failed('not found'));
       } catch (error) {
         console.log(JSON.stringify({ status: 'error' }));
         const message = error instanceof Error ? error.message : 'the work order failed';
-        json(res, 200, { status: 'error', diff: '', stdout: '', error: message });
+        json(res, 200, failed(message, { diff: '', stdout: '' }));
       }
     })();
   });
@@ -198,24 +211,24 @@ async function handleInvocation(
     body = JSON.parse(raw);
   } catch {
     console.log(JSON.stringify({ status: 'error' }));
-    json(res, 400, { status: 'error', error: 'body must be JSON' });
+    json(res, 400, failed('body must be JSON'));
     return;
   }
   const parsed = parseInvocation(body);
   if (parsed.ok === false) {
     console.log(JSON.stringify({ status: 'error' }));
-    json(res, 400, { status: 'error', error: parsed.error });
+    json(res, 400, failed(parsed.error));
     return;
   }
   const loaded = await resolveTask(parsed, loadDraft);
   if (loaded.ok === false) {
     console.log(JSON.stringify({ project: parsed.project, draftId: parsed.draftId, status: 'error' }));
-    json(res, loaded.status, { status: 'error', error: loaded.error });
+    json(res, loaded.status, failed(loaded.error));
     return;
   }
   if (isBusy()) {
     console.log(JSON.stringify({ project: parsed.project, draftId: parsed.draftId, status: 'error' }));
-    json(res, 200, { status: 'error', diff: '', stdout: '', error: 'a work order is already running' });
+    json(res, 200, failed('a work order is already running', { diff: '', stdout: '' }));
     return;
   }
   setBusy(true);
@@ -289,11 +302,11 @@ async function applyWorkOrder(
   target: TargetRepo,
   run: CommandRunner,
   paths: GoosePaths,
-): Promise<{ status: string; diff: string; stdout: string; error?: string }> {
+): Promise<GooseInvokeResult> {
   await rm(paths.workspace, { recursive: true, force: true });
   const clone = await run('git', ['clone', '--depth', '1', repoUrl, paths.workspace]);
   if (clone.code !== 0) {
-    return { status: 'error', diff: '', stdout: truncate(clone.stdout), error: commandFailure('git clone', clone) };
+    return failed(commandFailure('git clone', clone), { diff: '', stdout: truncate(clone.stdout) });
   }
   await writeFile(paths.taskPath, task, { mode: 0o600 });
   await chmod(paths.taskPath, 0o600);
@@ -311,15 +324,15 @@ async function applyWorkOrder(
   const diff = await run('git', ['diff', '--cached'], paths.workspace);
   const stdout = truncate(goose.stdout);
   if (goose.code !== 0) {
-    return { status: 'error', diff: diff.stdout, stdout, error: commandFailure('goose', goose) };
+    return failed(commandFailure('goose', goose), { diff: diff.stdout, stdout });
   }
   if (diff.code !== 0) {
-    return { status: 'error', diff: diff.stdout, stdout, error: commandFailure('git diff', diff) };
+    return failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout });
   }
   if (diff.stdout.trim().length === 0) {
-    return { status: 'error', diff: '', stdout, error: 'Goose made no changes' };
+    return failed('Goose made no changes', { diff: '', stdout });
   }
-  return { status: 'success', diff: diff.stdout, stdout };
+  return succeeded(diff.stdout, stdout);
 }
 
 function commandFailure(command: string, result: CommandResult): string {
