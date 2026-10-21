@@ -138,6 +138,21 @@ aws bedrock-agentcore invoke-agent-runtime \
   outfile.json
 ```
 
+Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. `task` is the work order text. `repoUrl` is one public `https://github.com/owner/repo` URL. Goose edits a shallow clone and does not push. The response is the git diff. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <goose-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"repoUrl":"https://github.com/octocat/Hello-World","task":"<work-order>"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  --cli-binary-format raw-in-base64-out \
+  outfile.json
+```
+
 Deploy prints `KnowledgeBaseId`. Direct retrieve is for debugging the index. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
 
 ```bash
@@ -237,7 +252,9 @@ The stack grants the agent its own role. The profile you use on these commands n
       "Action": "bedrock-agentcore:InvokeAgentRuntime",
       "Resource": [
         "<agent-runtime-arn>",
-        "<agent-runtime-arn>/runtime-endpoint/DEFAULT"
+        "<agent-runtime-arn>/runtime-endpoint/DEFAULT",
+        "<goose-runtime-arn>",
+        "<goose-runtime-arn>/runtime-endpoint/DEFAULT"
       ]
     },
     {

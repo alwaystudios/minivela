@@ -3,6 +3,7 @@ import * as esbuild from 'esbuild';
 import * as cdk from 'aws-cdk-lib/core';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import * as agentcore from 'aws-cdk-lib/aws-bedrockagentcore';
+import { Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -14,7 +15,7 @@ import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
-import { BEDROCK_REGIONS, EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from './models.js';
+import { BEDROCK_REGIONS, EMBED_MODEL_ID, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID, GOOSE_MODEL_ID } from './models.js';
 import { DECISIONS_VECTOR_INDEX } from './search-decisions.js';
 
 export class MinivelaStack extends cdk.Stack {
@@ -398,6 +399,38 @@ export class MinivelaStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AgentRuntimeArn', {
       value: agent.agentRuntimeArn,
       description: 'Talk to minivela here. Pass prompt and project. IAM auth.',
+    });
+
+    const gooseRuntimeName = `${this.stackName.replace(/-/g, '_').slice(0, 42)}_goose`;
+    const goose = new agentcore.Runtime(this, 'Goose', {
+      runtimeName: gooseRuntimeName,
+      description: 'Apply a work order with Goose. Pass repoUrl and task. IAM auth.',
+      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromAsset(path.join(process.cwd(), 'goose'), {
+        platform: Platform.LINUX_ARM64,
+      }),
+      protocolConfiguration: agentcore.ProtocolType.HTTP,
+      authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
+      lifecycleConfiguration: {
+        idleRuntimeSessionTimeout: cdk.Duration.seconds(300),
+        maxLifetime: cdk.Duration.seconds(900),
+      },
+      environmentVariables: {
+        GOOSE_PROVIDER: 'aws_bedrock',
+        GOOSE_MODEL: GOOSE_MODEL_ID,
+        GOOSE_MODE: 'auto',
+        GOOSE_DISABLE_SESSION_NAMING: 'true',
+        GOOSE_PATH_ROOT: '/tmp/goose',
+      },
+    });
+    goose.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${GOOSE_MODEL_ID}`],
+      }),
+    );
+    new cdk.CfnOutput(this, 'GooseRuntimeArn', {
+      value: goose.agentRuntimeArn,
+      description: 'Apply a work order with Goose. Pass repoUrl and task. IAM auth.',
     });
   }
 }

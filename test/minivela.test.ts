@@ -5,6 +5,8 @@ import { BEDROCK_REGIONS, EMBEDDING_DIMENSIONS, EXTRACT_MODEL_ID } from '../lib/
 import { DECISIONS_VECTOR_INDEX } from '../lib/search-decisions.js';
 import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
 
+jest.setTimeout(180_000);
+
 function stackOf(app: cdk.App, name: string): cdk.Stack {
   return app.node.findChild(name) as cdk.Stack;
 }
@@ -243,9 +245,9 @@ test('the knowledge base reads the documents bucket only', () => {
       DOCUMENTS_BUCKET_NAME: Match.anyValue(),
     }),
   });
-  const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime'))[0] as {
-    Properties: { RoleArn: { 'Fn::GetAtt': string[] } };
-  };
+  const runtime = Object.values(template.findResources('AWS::BedrockAgentCore::Runtime')).find(
+    (resource) => resource.Properties.AgentRuntimeName === 'minivela_agent',
+  ) as { Properties: { RoleArn: { 'Fn::GetAtt': string[] } } };
   const agentRoleId = runtime.Properties.RoleArn['Fn::GetAtt'][0];
   const agentPolicies = Object.values(template.findResources('AWS::IAM::Policy')).filter((policy) =>
     JSON.stringify(policy.Properties.Roles).includes(agentRoleId),

@@ -1,0 +1,20 @@
+version: "1.0.0"
+title: "Apply a work order"
+description: "Read the work order and edit this repository. Do not push, open a pull request, or call a remote server."
+instructions: |
+  The work order file is the only task. Edit this checkout, then stop.
+  Do not push. Do not open a pull request. Do not call any remote MCP server.
+prompt: |
+  Read the work order at /tmp/goose-task.md.
+  Edit the files in this repository until that work order is done.
+  Stop when the edit is complete.
+  Do not push.
+  Do not open a pull request.
+  Do not call any remote MCP server.
+extensions:
+  - type: builtin
+    name: developer
+settings:
+  goose_provider: aws_bedrock
+  goose_model: deepseek.v3.2
+  max_turns: 30
