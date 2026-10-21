@@ -311,7 +311,7 @@ async function completeDraft(query: {
       accept: 'application/json',
       body: JSON.stringify({
         anthropic_version: 'bedrock-2023-05-31',
-        max_tokens: 2048,
+        max_tokens: 8192,
         system: DRAFT_SYSTEM_PROMPT,
         messages: [
           {
@@ -323,9 +323,19 @@ async function completeDraft(query: {
     }),
   );
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
-    content?: Array<{ text?: string }>;
+    content?: Array<{ type?: string; text?: string }>;
+    stop_reason?: string;
+    usage?: { output_tokens?: number };
   };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
+  console.error(
+    JSON.stringify({
+      draftStop: payload.stop_reason,
+      draftTokens: payload.usage?.output_tokens,
+      draftChars: text.length,
+      draftTypes: payload.content?.map((part) => part.type),
+    }),
+  );
   if (!text) {
     throw new Error('draft model returned no text');
   }

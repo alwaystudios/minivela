@@ -81,6 +81,13 @@ export async function draftWorkOrder(input: {
     rules,
   });
   if (!parsed.ok) {
+    console.error(
+      JSON.stringify({
+        draftParse: parsed.response,
+        draftHead: text.slice(0, 500),
+        draftTail: text.slice(-500),
+      }),
+    );
     return { response: parsed.response, status: 'success' };
   }
   const item: DraftWrite = {
