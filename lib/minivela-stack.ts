@@ -356,8 +356,6 @@ export class MinivelaStack extends cdk.Stack {
         resources: [drafts.tableArn, breakdowns.tableArn],
       }),
     );
-    grantProjectSecretRead(agent.role);
-
     new cdk.CfnOutput(this, 'TranscriptBucketName', {
       value: transcripts.bucketName,
       description: 'Drop a .vtt file at <project>/transcripts/<meeting>.vtt',
@@ -438,19 +436,24 @@ export class MinivelaStack extends cdk.Stack {
         resources: [drafts.tableArn],
       }),
     );
-    grantProjectSecretRead(goose.role);
     new cdk.CfnOutput(this, 'GooseRuntimeArn', {
       value: goose.agentRuntimeArn,
       description: 'Apply a stored work order with Goose. Pass project and draftId. IAM auth.',
     });
+
+    grantProjectSecretReadToEveryRuntime(this);
   }
 }
 
-function grantProjectSecretRead(role: iam.IRole): void {
-  role.addToPrincipalPolicy(
-    new iam.PolicyStatement({
-      actions: ['secretsmanager:GetSecretValue'],
-      resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:minivela/*`],
-    }),
-  );
+function grantProjectSecretReadToEveryRuntime(scope: Construct): void {
+  for (const child of scope.node.findAll()) {
+    if (child instanceof agentcore.Runtime) {
+      child.role.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [`arn:aws:secretsmanager:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:secret:minivela/*`],
+        }),
+      );
+    }
+  }
 }

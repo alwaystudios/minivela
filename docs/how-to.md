@@ -26,7 +26,7 @@ aws secretsmanager create-secret \
   --region us-east-1
 ```
 
-Every agent runtime can read names under `minivela/` with `secretsmanager:GetSecretValue`. It cannot read other secrets, and it cannot write them. Code calls `getProjectSecret(project, name)`. The value stays out of logs.
+Every AgentCore runtime can read names under `minivela/` with `secretsmanager:GetSecretValue`. A new runtime gets that read on its own. It cannot read other secrets, and it cannot write them. Any agent calls `getProjectSecret(project, name)`. The name is the secret, such as `git-pat` or `jira`. The value stays out of logs.
 
 Upload a WebVTT file to the transcripts bucket at `<project>/transcripts/<meeting>.vtt`.
 
