@@ -138,14 +138,14 @@ aws bedrock-agentcore invoke-agent-runtime \
   outfile.json
 ```
 
-Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. `task` is the work order text. `repoUrl` is one public `https://github.com/owner/repo` URL. Goose edits a shallow clone and does not push. The response is the git diff. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
+Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. Pass `project` and `draftId` to load a stored work order. `repoUrl` is one public `https://github.com/owner/repo` URL from that order. Goose edits a shallow clone and does not push. The response is the git diff. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
 
 ```bash
 SESSION=$(uuidgen)
 aws bedrock-agentcore invoke-agent-runtime \
   --agent-runtime-arn <goose-runtime-arn> \
   --runtime-session-id "$SESSION" \
-  --payload '{"repoUrl":"https://github.com/octocat/Hello-World","task":"<work-order>"}' \
+  --payload '{"project":"acme","draftId":"<draft-id>","repoUrl":"https://github.com/octocat/Hello-World"}' \
   --qualifier DEFAULT \
   --profile my-profile \
   --region us-east-1 \

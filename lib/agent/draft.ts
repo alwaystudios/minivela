@@ -132,7 +132,7 @@ export async function readWorkOrder(input: {
   return { response: formatDraftMarkdown(stored, decisions), status: 'success' };
 }
 
-function isDraftWrite(value: unknown): value is DraftWrite {
+export function isDraftWrite(value: unknown): value is DraftWrite {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false;
   }

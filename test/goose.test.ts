@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { type Server, request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,12 +6,14 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { createApp } from '../lib/app.js';
 import { GOOSE_MODEL_ID } from '../lib/models.js';
 import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
+import type { DraftWrite } from '../lib/work-order.js';
 import {
   createGooseServer,
   gooseArguments,
   GOOSE_RECIPE_PATH,
   parseInvocation,
   STDOUT_LIMIT,
+  workOrderHasRepo,
   type CommandRunner,
 } from '../goose/server.js';
 
@@ -46,6 +48,32 @@ test.each([
 test('rejects an empty task', () => {
   const parsed = parseInvocation({ repoUrl: HELLO, task: '' });
   expect(parsed.ok).toBe(false);
+});
+
+test('accepts a stored draft', () => {
+  const parsed = parseInvocation({ repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
+  expect(parsed).toEqual({ ok: true, repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
+});
+
+test('rejects a draft payload that also has task', () => {
+  const parsed = parseInvocation({
+    repoUrl: HELLO,
+    project: 'acme',
+    draftId: 'draft-1',
+    task: 'Add a line to README.md',
+  });
+  expect(parsed.ok).toBe(false);
+});
+
+test('rejects a draft without repoUrl', () => {
+  const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
+  expect(parsed.ok).toBe(false);
+});
+
+test('a repoUrl must be on the work order', () => {
+  expect(workOrderHasRepo(sampleDraft(), HELLO)).toBe(true);
+  expect(workOrderHasRepo(sampleDraft(), HELLO_GIT)).toBe(true);
+  expect(workOrderHasRepo(sampleDraft(), 'https://github.com/octocat/Spoon-Knife')).toBe(false);
 });
 
 test('goose runs from an argument array with the developer builtin and no gateway', () => {
@@ -146,6 +174,91 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
   }
 });
 
+test('a stored draft is formatted as the work order Goose reads', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const taskPath = join(root, 'task.md');
+  const draft = sampleDraft();
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'goose') {
+      const task = await readFile(taskPath, 'utf8');
+      expect(task).toContain('Draft: draft-1');
+      expect(task).toContain('Add a Smoke line to README.md');
+      expect(task).toContain('octocat/Hello-World');
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(
+    run,
+    { recipePath: GOOSE_RECIPE_PATH, taskPath, workspace: join(root, 'workspace') },
+    async (key) => {
+      expect(key).toEqual({ project: 'acme', draftId: 'draft-1' });
+      return draft;
+    },
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ status: 'success', diff: 'diff --git a/README.md\n' });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing draft is HTTP 200 with an error', async () => {
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    {
+      recipePath: GOOSE_RECIPE_PATH,
+      taskPath: '/tmp/unused-task.md',
+      workspace: '/tmp/unused-workspace',
+    },
+    async () => undefined,
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { repoUrl: HELLO, project: 'acme', draftId: 'missing' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ status: 'error', error: 'No draft with that id.' });
+  } finally {
+    await close(server);
+  }
+});
+
+test('a repo that is not on the work order is HTTP 400', async () => {
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    {
+      recipePath: GOOSE_RECIPE_PATH,
+      taskPath: '/tmp/unused-task.md',
+      workspace: '/tmp/unused-workspace',
+    },
+    async () => sampleDraft(),
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, {
+      repoUrl: 'https://github.com/octocat/Spoon-Knife',
+      project: 'acme',
+      draftId: 'draft-1',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.body.status).toBe('error');
+    expect(response.body.error).toContain('work order');
+  } finally {
+    await close(server);
+  }
+});
+
 test('validation failure is HTTP 400', async () => {
   const server = createGooseServer(async () => {
     throw new Error('should not run');
@@ -217,6 +330,7 @@ test('the minivela stack includes the goose runtime', () => {
       GOOSE_MODE: 'auto',
       GOOSE_DISABLE_SESSION_NAMING: 'true',
       GOOSE_PATH_ROOT: '/tmp/goose',
+      DRAFTS_TABLE_NAME: Match.anyValue(),
     },
   });
   template.hasOutput('GooseRuntimeArn', {});
@@ -232,11 +346,31 @@ test('the minivela stack includes the goose runtime', () => {
   const policy = JSON.stringify(policies);
   expect(policy).toContain('bedrock:InvokeModel');
   expect(policy).toContain(`foundation-model/${GOOSE_MODEL_ID}`);
+  expect(policy).toContain('dynamodb:GetItem');
   expect(policy).not.toContain('bedrock:Retrieve');
-  expect(policy).not.toContain('dynamodb:');
+  expect(policy).not.toContain('dynamodb:Query');
+  expect(policy).not.toContain('dynamodb:PutItem');
   expect(policy).not.toContain('s3:');
   expect(JSON.stringify(template.toJSON())).not.toContain('goose_smoke');
 });
+
+function sampleDraft(): DraftWrite {
+  return {
+    project: 'acme',
+    draftId: 'draft-1',
+    createdAt: '2026-10-21T00:00:00.000Z',
+    workOrder: {
+      intent: 'Add a Smoke line to README.md',
+      summary: 'Add a Smoke line to README.md',
+      repos: [{ owner: 'octocat', repo: 'Hello-World' }],
+      constraints: ['small diff'],
+      acceptance: ['README has a Smoke line'],
+      rules: [{ project: 'global', ruleId: 'r1', title: 'Small diffs', body: 'Do not widen the change.' }],
+      rulePrecedence: 'follow the rule',
+    },
+    citations: { decisionIds: [], documentUris: [] },
+  };
+}
 
 function stackOf(app: ReturnType<typeof createApp>) {
   return app.node.findChild(DEFAULT_STACK_NAME) as import('aws-cdk-lib/core').Stack;

@@ -404,9 +404,11 @@ export class MinivelaStack extends cdk.Stack {
     const gooseRuntimeName = `${this.stackName.replace(/-/g, '_').slice(0, 42)}_goose`;
     const goose = new agentcore.Runtime(this, 'Goose', {
       runtimeName: gooseRuntimeName,
-      description: 'Apply a work order with Goose. Pass repoUrl and task. IAM auth.',
-      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromAsset(path.join(process.cwd(), 'goose'), {
+      description: 'Apply a stored work order with Goose. Pass project, draftId, and repoUrl. IAM auth.',
+      agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromAsset(process.cwd(), {
+        file: 'goose/Dockerfile',
         platform: Platform.LINUX_ARM64,
+        exclude: ['cdk.out', 'node_modules', 'test', 'docs', 'samples', '.git'],
       }),
       protocolConfiguration: agentcore.ProtocolType.HTTP,
       authorizerConfiguration: agentcore.RuntimeAuthorizerConfiguration.usingIAM(),
@@ -420,6 +422,7 @@ export class MinivelaStack extends cdk.Stack {
         GOOSE_MODE: 'auto',
         GOOSE_DISABLE_SESSION_NAMING: 'true',
         GOOSE_PATH_ROOT: '/tmp/goose',
+        DRAFTS_TABLE_NAME: drafts.tableName,
       },
     });
     goose.role.addToPrincipalPolicy(
@@ -428,9 +431,15 @@ export class MinivelaStack extends cdk.Stack {
         resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${GOOSE_MODEL_ID}`],
       }),
     );
+    goose.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:GetItem'],
+        resources: [drafts.tableArn],
+      }),
+    );
     new cdk.CfnOutput(this, 'GooseRuntimeArn', {
       value: goose.agentRuntimeArn,
-      description: 'Apply a work order with Goose. Pass repoUrl and task. IAM auth.',
+      description: 'Apply a stored work order with Goose. Pass project, draftId, and repoUrl. IAM auth.',
     });
   }
 }

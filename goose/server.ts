@@ -1,7 +1,11 @@
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { spawn } from 'node:child_process';
 import { chmod, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename } from 'node:path';
+import { isDraftWrite } from '../lib/agent/draft.js';
+import { formatDraftMarkdown, type DraftWrite } from '../lib/work-order.js';
 
 export const GOOSE_RECIPE_PATH = '/opt/goose/recipe.yaml';
 export const GOOSE_TASK_PATH = '/tmp/goose-task.md';
@@ -24,6 +28,13 @@ export type GoosePaths = {
   workspace: string;
 };
 
+export type DraftLoader = (key: { project: string; draftId: string }) => Promise<unknown>;
+
+export type ParsedInvocation =
+  | { ok: true; repoUrl: string; task: string }
+  | { ok: true; repoUrl: string; project: string; draftId: string }
+  | { ok: false; error: string };
+
 export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
   return [
     'goose',
@@ -40,28 +51,47 @@ export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
   ];
 }
 
-export function parseInvocation(
-  body: unknown,
-): { ok: true; repoUrl: string; task: string } | { ok: false; error: string } {
+export function parseInvocation(body: unknown): ParsedInvocation {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-    return { ok: false, error: 'body must be a JSON object with repoUrl and task' };
+    return { ok: false, error: 'body must be a JSON object with repoUrl and a work order' };
   }
   const record = body as Record<string, unknown>;
-  const keys = Object.keys(record);
-  if (keys.length !== 2 || !Object.hasOwn(record, 'repoUrl') || !Object.hasOwn(record, 'task')) {
-    return { ok: false, error: 'body must contain only repoUrl and task' };
-  }
+  const keys = new Set(Object.keys(record));
   if (typeof record.repoUrl !== 'string') {
     return { ok: false, error: 'repoUrl must be a string' };
-  }
-  if (typeof record.task !== 'string' || record.task.length === 0) {
-    return { ok: false, error: 'task must be a non-empty string' };
   }
   const repoUrl = validateRepoUrl(record.repoUrl);
   if (repoUrl.ok === false) {
     return repoUrl;
   }
-  return { ok: true, repoUrl: repoUrl.repoUrl, task: record.task };
+  if (keys.size === 2 && keys.has('repoUrl') && keys.has('task')) {
+    if (typeof record.task !== 'string' || record.task.length === 0) {
+      return { ok: false, error: 'task must be a non-empty string' };
+    }
+    return { ok: true, repoUrl: repoUrl.repoUrl, task: record.task };
+  }
+  if (keys.size === 3 && keys.has('repoUrl') && keys.has('project') && keys.has('draftId')) {
+    if (typeof record.project !== 'string' || record.project.trim().length === 0) {
+      return { ok: false, error: 'project must be a non-empty string' };
+    }
+    if (typeof record.draftId !== 'string' || record.draftId.trim().length === 0) {
+      return { ok: false, error: 'draftId must be a non-empty string' };
+    }
+    return { ok: true, repoUrl: repoUrl.repoUrl, project: record.project.trim(), draftId: record.draftId.trim() };
+  }
+  return { ok: false, error: 'body must contain repoUrl with task, or repoUrl with project and draftId' };
+}
+
+export function workOrderHasRepo(item: DraftWrite, repoUrl: string): boolean {
+  const wanted = githubOwnerRepo(repoUrl);
+  if (wanted === undefined) {
+    return false;
+  }
+  return item.workOrder.repos.some(
+    (repo) =>
+      repo.owner.toLowerCase() === wanted.owner.toLowerCase() &&
+      repo.repo.toLowerCase() === wanted.repo.toLowerCase(),
+  );
 }
 
 function validateRepoUrl(repoUrl: string): { ok: true; repoUrl: string } | { ok: false; error: string } {
@@ -98,6 +128,20 @@ function validateRepoUrl(repoUrl: string): { ok: true; repoUrl: string } | { ok:
   return { ok: true, repoUrl };
 }
 
+function githubOwnerRepo(repoUrl: string): { owner: string; repo: string } | undefined {
+  const parsed = validateRepoUrl(repoUrl);
+  if (parsed.ok === false) {
+    return undefined;
+  }
+  const url = new URL(parsed.repoUrl);
+  const owner = url.pathname.split('/')[1];
+  let repo = url.pathname.split('/')[2];
+  if (repo.endsWith('.git')) {
+    repo = repo.slice(0, -4);
+  }
+  return { owner, repo };
+}
+
 export function createGooseServer(
   run: CommandRunner = spawnCommand,
   paths: GoosePaths = {
@@ -105,6 +149,7 @@ export function createGooseServer(
     taskPath: GOOSE_TASK_PATH,
     workspace: GOOSE_WORKSPACE,
   },
+  loadDraft: DraftLoader = getDraftFromTable,
 ): Server {
   let busy = false;
   let statusChangedAt = unixSeconds();
@@ -132,7 +177,7 @@ export function createGooseServer(
           return;
         }
         if (req.method === 'POST' && req.url === '/invocations') {
-          await handleInvocation(req, res, run, paths, () => busy, setBusy);
+          await handleInvocation(req, res, run, paths, loadDraft, () => busy, setBusy);
           return;
         }
         json(res, 404, { status: 'error', error: 'not found' });
@@ -150,6 +195,7 @@ async function handleInvocation(
   res: ServerResponse,
   run: CommandRunner,
   paths: GoosePaths,
+  loadDraft: DraftLoader,
   isBusy: () => boolean,
   setBusy: (next: boolean) => void,
 ): Promise<void> {
@@ -168,6 +214,12 @@ async function handleInvocation(
     json(res, 400, { status: 'error', error: parsed.error });
     return;
   }
+  const loaded = await resolveTask(parsed, loadDraft);
+  if (loaded.ok === false) {
+    console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: 'error' }));
+    json(res, loaded.status, { status: 'error', error: loaded.error });
+    return;
+  }
   if (isBusy()) {
     console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: 'error' }));
     json(res, 200, { status: 'error', diff: '', stdout: '', error: 'a work order is already running' });
@@ -175,13 +227,53 @@ async function handleInvocation(
   }
   setBusy(true);
   try {
-    const result = await applyWorkOrder(parsed.repoUrl, parsed.task, run, paths);
+    const result = await applyWorkOrder(parsed.repoUrl, loaded.task, run, paths);
     console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: result.status }));
     json(res, 200, result);
   } finally {
     setBusy(false);
     await rm(paths.taskPath, { force: true }).catch(() => undefined);
   }
+}
+
+async function resolveTask(
+  parsed: Exclude<ParsedInvocation, { ok: false }>,
+  loadDraft: DraftLoader,
+): Promise<{ ok: true; task: string } | { ok: false; status: number; error: string }> {
+  if ('task' in parsed) {
+    return { ok: true, task: parsed.task };
+  }
+  let stored: unknown;
+  try {
+    stored = await loadDraft({ project: parsed.project, draftId: parsed.draftId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'the draft failed to load';
+    return { ok: false, status: 200, error: message };
+  }
+  if (stored === undefined) {
+    return { ok: false, status: 200, error: 'No draft with that id.' };
+  }
+  if (!isDraftWrite(stored)) {
+    return { ok: false, status: 200, error: 'The stored draft could not be read.' };
+  }
+  if (!workOrderHasRepo(stored, parsed.repoUrl)) {
+    return { ok: false, status: 400, error: 'repoUrl must be a repository on this work order' };
+  }
+  return { ok: true, task: formatDraftMarkdown(stored) };
+}
+
+async function getDraftFromTable(key: { project: string; draftId: string }): Promise<unknown> {
+  const table = process.env.DRAFTS_TABLE_NAME;
+  if (!table) {
+    throw new Error('DRAFTS_TABLE_NAME is not set');
+  }
+  const result = await DynamoDBDocumentClient.from(new DynamoDBClient({})).send(
+    new GetCommand({
+      TableName: table,
+      Key: key,
+    }),
+  );
+  return result.Item;
 }
 
 async function applyWorkOrder(
