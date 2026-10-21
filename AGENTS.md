@@ -24,6 +24,8 @@ Every file you upload to the documents bucket needs a sidecar beside it. For `no
 
 `project` is the client id, such as `acme`, or `global` when the document applies to every client. A ticket prefix or a product name is not a client id.
 
+This repo is public. Do not write a real client name, client project, or client repository into code, tests, docs, fixtures, or commit messages. Use a generic id such as `acme` or `demo`.
+
 Do not upload a file without this sidecar. A filtered retrieve would miss it, and an unfiltered retrieve would return it for every client.
 
 ## Ingestion

@@ -5,40 +5,40 @@ import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
 import { getProjectSecret, projectSecretName, type ProjectSecretClient } from '../lib/project-secret.js';
 
 test('a project secret is minivela/<project>/<name>', () => {
-  expect(projectSecretName('bpp', 'git-pat')).toBe('minivela/bpp/git-pat');
-  expect(projectSecretName(' bpp ', 'jira')).toBe('minivela/bpp/jira');
+  expect(projectSecretName('acme', 'git-pat')).toBe('minivela/acme/git-pat');
+  expect(projectSecretName(' acme ', 'jira')).toBe('minivela/acme/jira');
 });
 
-test.each(['', 'bpp/git', '..', 'git pat', 'minivela/bpp/git-pat'])(
+test.each(['', 'acme/git', '..', 'git pat', 'minivela/acme/git-pat'])(
   'rejects secret segment %j',
   (segment) => {
     expect(() => projectSecretName(segment, 'git-pat')).toThrow(/minivela\/<project>\/<name>/);
-    expect(() => projectSecretName('bpp', segment)).toThrow(/minivela\/<project>\/<name>/);
+    expect(() => projectSecretName('acme', segment)).toThrow(/minivela\/<project>\/<name>/);
   },
 );
 
 test('getProjectSecret reads that name and returns the string', async () => {
   const secretId = await captureSecretId(async () => 'token-value');
-  expect(secretId).toBe('minivela/bpp/git-pat');
-  await expect(getProjectSecret('bpp', 'git-pat', client(async () => 'token-value'))).resolves.toBe('token-value');
+  expect(secretId).toBe('minivela/acme/git-pat');
+  await expect(getProjectSecret('acme', 'git-pat', client(async () => 'token-value'))).resolves.toBe('token-value');
 });
 
 test('a missing or unreadable secret is an error and the value is not in the message', async () => {
-  await expect(getProjectSecret('bpp', 'git-pat', client(async () => undefined))).rejects.toThrow(
-    'project secret minivela/bpp/git-pat is missing or unreadable',
+  await expect(getProjectSecret('acme', 'git-pat', client(async () => undefined))).rejects.toThrow(
+    'project secret minivela/acme/git-pat is missing or unreadable',
   );
   await expect(
     getProjectSecret(
-      'bpp',
+      'acme',
       'git-pat',
       client(async () => {
         throw new Error('denied token-value');
       }),
     ),
-  ).rejects.toThrow('project secret minivela/bpp/git-pat is missing or unreadable');
+  ).rejects.toThrow('project secret minivela/acme/git-pat is missing or unreadable');
   await expect(
     getProjectSecret(
-      'bpp',
+      'acme',
       'git-pat',
       client(async () => {
         throw new Error('denied token-value');
@@ -82,7 +82,7 @@ test('every agent runtime can read minivela secrets and no other role can', () =
 function client(read: () => Promise<string | undefined>): ProjectSecretClient {
   return {
     async send(command: GetSecretValueCommand) {
-      expect(command.input.SecretId).toBe('minivela/bpp/git-pat');
+      expect(command.input.SecretId).toBe('minivela/acme/git-pat');
       return { SecretString: await read() };
     },
   };
@@ -90,7 +90,7 @@ function client(read: () => Promise<string | undefined>): ProjectSecretClient {
 
 async function captureSecretId(read: () => Promise<string | undefined>): Promise<string | undefined> {
   let secretId: string | undefined;
-  await getProjectSecret('bpp', 'git-pat', {
+  await getProjectSecret('acme', 'git-pat', {
     async send(command: GetSecretValueCommand) {
       secretId = command.input.SecretId;
       return { SecretString: await read() };

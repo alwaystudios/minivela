@@ -16,11 +16,11 @@ A stack name starts with a letter and contains only letters, digits, and hyphens
 
 Deploy prints the transcripts bucket name and the documents bucket name.
 
-A project secret is a Secrets Manager secret named `minivela/<project>/<name>`. The bpp git PAT is `minivela/bpp/git-pat`. A Jira token for that project is `minivela/bpp/jira`. The stack does not create these secrets and does not set a value. Create one with the value in a file, not on the command line:
+A project secret is a Secrets Manager secret named `minivela/<project>/<name>`. The acme git PAT is `minivela/acme/git-pat`. A Jira token for that project is `minivela/acme/jira`. The stack does not create these secrets and does not set a value. Create one with the value in a file, not on the command line:
 
 ```bash
 aws secretsmanager create-secret \
-  --name minivela/bpp/git-pat \
+  --name minivela/acme/git-pat \
   --secret-string file://git-pat.txt \
   --profile my-profile \
   --region us-east-1
