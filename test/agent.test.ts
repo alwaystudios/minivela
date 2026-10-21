@@ -519,6 +519,10 @@ test('the draft prompt keeps source facts and leaves rules out of the draft', ()
   expect(DRAFT_SYSTEM_PROMPT).toContain('Acceptance is only the lines copied from the source.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('intent names every step in one line, including a later step and work that runs in parallel.');
   expect(DRAFT_SYSTEM_PROMPT).toContain('Do not hedge a path.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A folder the source names in words is not a slash path.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('The premise quotes those words.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('A slash path is allowed only when the source or that repo\'s summary already contains it.');
+  expect(DRAFT_SYSTEM_PROMPT).toContain('When a step removes a secret or input from a workflow, the summary says every caller file the source already names drops that same secret or input.');
 });
 
 const storedDraft = {
