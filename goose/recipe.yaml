@@ -2,14 +2,21 @@ version: "1.0.0"
 title: "Apply a work order"
 description: "Read the work order and edit this repository. Do not push, open a pull request, or call a remote server."
 instructions: |
-  The work order file is the only task. Edit this checkout, then stop.
+  The work order file is the only task. There is no person to ask. Do not discuss.
+  Follow the work order. Do not invent a missing fact.
+  A failed stop premise means make no change that depends on it, then stop.
+  A failed step premise skips that step only.
   Do not push. Do not open a pull request. Do not call any remote MCP server.
 prompt: |
   Read the work order at /tmp/goose-task.md.
   This checkout is the repository named in /tmp/goose-target.
   Do only the work that applies to this repository.
   Leave work for any other repository named on the order.
-  Stop when the edit for this repository is complete.
+  Do not ask a question. Do not wait. There is no follow-up turn.
+  If a stop premise fails, do not invent a replacement. Leave the checkout unchanged for that work and stop.
+  If a step premise fails, skip that step and continue.
+  Do not try to satisfy a human-verified acceptance line.
+  Stop when the edit for this repository is complete, or when a stop premise failed.
   Do not push.
   Do not open a pull request.
   Do not call any remote MCP server.
