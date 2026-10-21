@@ -8,7 +8,8 @@ The same stack runs [Goose](https://goose-docs.ai/) in a second AgentCore runtim
 
 ```mermaid
 flowchart TB
-  caller[Caller] -->|IAM| agent[AgentCore]
+  caller[Caller] -->|IAM| agent[Agent]
+  caller -->|IAM| goose[Goose]
 
   transcripts[S3 transcripts] -->|".vtt"| extract[Lambda]
   extract --> bedrock[Bedrock]
@@ -25,6 +26,9 @@ flowchart TB
   agent --> decisions
   agent --> tables[(DynamoDB rules, repos, drafts, breakdowns, templates)]
   agent --> documents
+
+  goose --> bedrock
+  goose --> tables
 ```
 
 ## Provision
