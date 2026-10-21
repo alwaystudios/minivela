@@ -316,6 +316,9 @@ async function applyWorkOrder(
   if (diff.code !== 0) {
     return { status: 'error', diff: diff.stdout, stdout, error: commandFailure('git diff', diff) };
   }
+  if (diff.stdout.trim().length === 0) {
+    return { status: 'error', diff: '', stdout, error: 'Goose made no changes' };
+  }
   return { status: 'success', diff: diff.stdout, stdout };
 }
 

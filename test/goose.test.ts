@@ -301,6 +301,30 @@ test('a multi-repo order with a selector clones that repo', async () => {
   ]);
 });
 
+test('an empty diff after Goose exits 0 is an error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      diff: '',
+      error: 'Goose made no changes',
+    });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('validation failure is HTTP 400', async () => {
   const server = createGooseServer(async () => {
     throw new Error('should not run');
@@ -322,12 +346,15 @@ test('while goose is running, ping is HealthyBusy', async () => {
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const run: CommandRunner = async (command) => {
+  const run: CommandRunner = async (command, args) => {
     if (command === 'goose') {
       const ping = await getJson(port, '/ping');
       expect(ping.body.status).toBe('HealthyBusy');
       release();
       return { code: 0, stdout: '', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
     return { code: 0, stdout: '', stderr: '' };
   };
