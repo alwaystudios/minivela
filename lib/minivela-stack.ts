@@ -404,7 +404,7 @@ export class MinivelaStack extends cdk.Stack {
     const gooseRuntimeName = `${this.stackName.replace(/-/g, '_').slice(0, 42)}_goose`;
     const goose = new agentcore.Runtime(this, 'Goose', {
       runtimeName: gooseRuntimeName,
-      description: 'Apply a stored work order with Goose. Pass project, draftId, and repoUrl. IAM auth.',
+      description: 'Apply a stored work order with Goose. Pass project and draftId. IAM auth.',
       agentRuntimeArtifact: agentcore.AgentRuntimeArtifact.fromAsset(process.cwd(), {
         file: 'goose/Dockerfile',
         platform: Platform.LINUX_ARM64,
@@ -439,7 +439,7 @@ export class MinivelaStack extends cdk.Stack {
     );
     new cdk.CfnOutput(this, 'GooseRuntimeArn', {
       value: goose.agentRuntimeArn,
-      description: 'Apply a stored work order with Goose. Pass project, draftId, and repoUrl. IAM auth.',
+      description: 'Apply a stored work order with Goose. Pass project and draftId. IAM auth.',
     });
   }
 }

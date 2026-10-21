@@ -6,8 +6,10 @@ instructions: |
   Do not push. Do not open a pull request. Do not call any remote MCP server.
 prompt: |
   Read the work order at /tmp/goose-task.md.
-  Edit the files in this repository until that work order is done.
-  Stop when the edit is complete.
+  This checkout is the repository named in /tmp/goose-target.
+  Do only the work that applies to this repository.
+  Leave work for any other repository named on the order.
+  Stop when the edit for this repository is complete.
   Do not push.
   Do not open a pull request.
   Do not call any remote MCP server.

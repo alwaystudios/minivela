@@ -9,6 +9,7 @@ import { formatDraftMarkdown, type DraftWrite } from '../lib/work-order.js';
 
 export const GOOSE_RECIPE_PATH = '/opt/goose/recipe.yaml';
 export const GOOSE_TASK_PATH = '/tmp/goose-task.md';
+export const GOOSE_TARGET_PATH = '/tmp/goose-target';
 export const GOOSE_WORKSPACE = '/tmp/workspace';
 export const STDOUT_LIMIT = 8000;
 
@@ -25,15 +26,17 @@ export type CommandRunner = (command: string, args: string[], cwd?: string) => P
 export type GoosePaths = {
   recipePath: string;
   taskPath: string;
+  targetPath: string;
   workspace: string;
 };
 
 export type DraftLoader = (key: { project: string; draftId: string }) => Promise<unknown>;
 
 export type ParsedInvocation =
-  | { ok: true; repoUrl: string; task: string }
-  | { ok: true; repoUrl: string; project: string; draftId: string }
+  | { ok: true; project: string; draftId: string; repo?: string }
   | { ok: false; error: string };
+
+export type TargetRepo = { owner: string; repo: string };
 
 export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
   return [
@@ -53,93 +56,82 @@ export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
 
 export function parseInvocation(body: unknown): ParsedInvocation {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-    return { ok: false, error: 'body must be a JSON object with repoUrl and a work order' };
+    return { ok: false, error: 'body must be a JSON object with project and draftId' };
   }
   const record = body as Record<string, unknown>;
   const keys = new Set(Object.keys(record));
-  if (typeof record.repoUrl !== 'string') {
-    return { ok: false, error: 'repoUrl must be a string' };
+  if (!keys.has('project') || !keys.has('draftId') || keys.has('task') || keys.has('repoUrl')) {
+    return { ok: false, error: 'body must contain project and draftId' };
   }
-  const repoUrl = validateRepoUrl(record.repoUrl);
-  if (repoUrl.ok === false) {
-    return repoUrl;
+  if (![...keys].every((key) => key === 'project' || key === 'draftId' || key === 'repo')) {
+    return { ok: false, error: 'body must contain project and draftId' };
   }
-  if (keys.size === 2 && keys.has('repoUrl') && keys.has('task')) {
-    if (typeof record.task !== 'string' || record.task.length === 0) {
-      return { ok: false, error: 'task must be a non-empty string' };
-    }
-    return { ok: true, repoUrl: repoUrl.repoUrl, task: record.task };
+  if (typeof record.project !== 'string' || record.project.trim().length === 0) {
+    return { ok: false, error: 'project must be a non-empty string' };
   }
-  if (keys.size === 3 && keys.has('repoUrl') && keys.has('project') && keys.has('draftId')) {
-    if (typeof record.project !== 'string' || record.project.trim().length === 0) {
-      return { ok: false, error: 'project must be a non-empty string' };
-    }
-    if (typeof record.draftId !== 'string' || record.draftId.trim().length === 0) {
-      return { ok: false, error: 'draftId must be a non-empty string' };
-    }
-    return { ok: true, repoUrl: repoUrl.repoUrl, project: record.project.trim(), draftId: record.draftId.trim() };
+  if (typeof record.draftId !== 'string' || record.draftId.trim().length === 0) {
+    return { ok: false, error: 'draftId must be a non-empty string' };
   }
-  return { ok: false, error: 'body must contain repoUrl with task, or repoUrl with project and draftId' };
+  if (!keys.has('repo')) {
+    return { ok: true, project: record.project.trim(), draftId: record.draftId.trim() };
+  }
+  if (typeof record.repo !== 'string') {
+    return { ok: false, error: 'repo must be owner/repo' };
+  }
+  const repo = parseRepoRef(record.repo);
+  if (repo.ok === false) {
+    return repo;
+  }
+  return {
+    ok: true,
+    project: record.project.trim(),
+    draftId: record.draftId.trim(),
+    repo: `${repo.owner}/${repo.repo}`,
+  };
 }
 
-export function workOrderHasRepo(item: DraftWrite, repoUrl: string): boolean {
-  const wanted = githubOwnerRepo(repoUrl);
-  if (wanted === undefined) {
-    return false;
+export function parseRepoRef(value: string): { ok: true } & TargetRepo | { ok: false; error: string } {
+  const parts = value.split('/');
+  if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
+    return { ok: false, error: 'repo must be owner/repo' };
   }
-  return item.workOrder.repos.some(
+  if (!OWNER_REPO.test(parts[0]) || !OWNER_REPO.test(parts[1])) {
+    return { ok: false, error: 'repo must be owner/repo' };
+  }
+  return { ok: true, owner: parts[0], repo: parts[1] };
+}
+
+export function selectTargetRepo(
+  item: DraftWrite,
+  requested?: string,
+): { ok: true } & TargetRepo | { ok: false; error: string } {
+  const repos = item.workOrder.repos;
+  if (repos.length === 0) {
+    return { ok: false, error: 'this work order names no repository' };
+  }
+  if (requested === undefined) {
+    if (repos.length > 1) {
+      return { ok: false, error: 'this work order names more than one repository; pass repo as owner/repo' };
+    }
+    return { ok: true, owner: repos[0].owner, repo: repos[0].repo };
+  }
+  const wanted = parseRepoRef(requested);
+  if (wanted.ok === false) {
+    return wanted;
+  }
+  const match = repos.find(
     (repo) =>
       repo.owner.toLowerCase() === wanted.owner.toLowerCase() &&
       repo.repo.toLowerCase() === wanted.repo.toLowerCase(),
   );
+  if (match === undefined) {
+    return { ok: false, error: 'repo must be a repository on this work order' };
+  }
+  return { ok: true, owner: match.owner, repo: match.repo };
 }
 
-function validateRepoUrl(repoUrl: string): { ok: true; repoUrl: string } | { ok: false; error: string } {
-  if (/^(?:file:|ssh:)|git@/i.test(repoUrl)) {
-    return { ok: false, error: 'repoUrl must be an https github.com repository' };
-  }
-  let url: URL;
-  try {
-    url = new URL(repoUrl);
-  } catch {
-    return { ok: false, error: 'repoUrl must be an https github.com repository' };
-  }
-  if (url.protocol !== 'https:' || url.hostname !== 'github.com') {
-    return { ok: false, error: 'repoUrl must be an https github.com repository' };
-  }
-  if (url.username !== '' || url.password !== '' || url.port !== '' || url.search !== '' || url.hash !== '') {
-    return { ok: false, error: 'repoUrl must not include userinfo, a port, a query, or a fragment' };
-  }
-  if (url.pathname.includes('%')) {
-    return { ok: false, error: 'repoUrl must be an https github.com repository' };
-  }
-  const parts = url.pathname.split('/');
-  if (parts.length !== 3 || parts[0] !== '') {
-    return { ok: false, error: 'repoUrl path must be /owner/repo or /owner/repo.git' };
-  }
-  const owner = parts[1];
-  let repo = parts[2];
-  if (repo.endsWith('.git')) {
-    repo = repo.slice(0, -4);
-  }
-  if (owner.length === 0 || repo.length === 0 || !OWNER_REPO.test(owner) || !OWNER_REPO.test(repo)) {
-    return { ok: false, error: 'repoUrl path must be /owner/repo or /owner/repo.git' };
-  }
-  return { ok: true, repoUrl };
-}
-
-function githubOwnerRepo(repoUrl: string): { owner: string; repo: string } | undefined {
-  const parsed = validateRepoUrl(repoUrl);
-  if (parsed.ok === false) {
-    return undefined;
-  }
-  const url = new URL(parsed.repoUrl);
-  const owner = url.pathname.split('/')[1];
-  let repo = url.pathname.split('/')[2];
-  if (repo.endsWith('.git')) {
-    repo = repo.slice(0, -4);
-  }
-  return { owner, repo };
+export function githubCloneUrl(target: TargetRepo): string {
+  return `https://github.com/${target.owner}/${target.repo}`;
 }
 
 export function createGooseServer(
@@ -147,6 +139,7 @@ export function createGooseServer(
   paths: GoosePaths = {
     recipePath: GOOSE_RECIPE_PATH,
     taskPath: GOOSE_TASK_PATH,
+    targetPath: GOOSE_TARGET_PATH,
     workspace: GOOSE_WORKSPACE,
   },
   loadDraft: DraftLoader = getDraftFromTable,
@@ -216,33 +209,41 @@ async function handleInvocation(
   }
   const loaded = await resolveTask(parsed, loadDraft);
   if (loaded.ok === false) {
-    console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: 'error' }));
+    console.log(JSON.stringify({ project: parsed.project, draftId: parsed.draftId, status: 'error' }));
     json(res, loaded.status, { status: 'error', error: loaded.error });
     return;
   }
   if (isBusy()) {
-    console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: 'error' }));
+    console.log(JSON.stringify({ project: parsed.project, draftId: parsed.draftId, status: 'error' }));
     json(res, 200, { status: 'error', diff: '', stdout: '', error: 'a work order is already running' });
     return;
   }
   setBusy(true);
   try {
-    const result = await applyWorkOrder(parsed.repoUrl, loaded.task, run, paths);
-    console.log(JSON.stringify({ repoUrl: parsed.repoUrl, status: result.status }));
+    const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths);
+    console.log(
+      JSON.stringify({
+        project: parsed.project,
+        draftId: parsed.draftId,
+        repo: `${loaded.target.owner}/${loaded.target.repo}`,
+        status: result.status,
+      }),
+    );
     json(res, 200, result);
   } finally {
     setBusy(false);
     await rm(paths.taskPath, { force: true }).catch(() => undefined);
+    await rm(paths.targetPath, { force: true }).catch(() => undefined);
   }
 }
 
 async function resolveTask(
   parsed: Exclude<ParsedInvocation, { ok: false }>,
   loadDraft: DraftLoader,
-): Promise<{ ok: true; task: string } | { ok: false; status: number; error: string }> {
-  if ('task' in parsed) {
-    return { ok: true, task: parsed.task };
-  }
+): Promise<
+  | { ok: true; task: string; repoUrl: string; target: TargetRepo }
+  | { ok: false; status: number; error: string }
+> {
   let stored: unknown;
   try {
     stored = await loadDraft({ project: parsed.project, draftId: parsed.draftId });
@@ -256,10 +257,16 @@ async function resolveTask(
   if (!isDraftWrite(stored)) {
     return { ok: false, status: 200, error: 'The stored draft could not be read.' };
   }
-  if (!workOrderHasRepo(stored, parsed.repoUrl)) {
-    return { ok: false, status: 400, error: 'repoUrl must be a repository on this work order' };
+  const target = selectTargetRepo(stored, parsed.repo);
+  if (target.ok === false) {
+    return { ok: false, status: 400, error: target.error };
   }
-  return { ok: true, task: formatDraftMarkdown(stored) };
+  return {
+    ok: true,
+    task: formatDraftMarkdown(stored),
+    repoUrl: githubCloneUrl(target),
+    target,
+  };
 }
 
 async function getDraftFromTable(key: { project: string; draftId: string }): Promise<unknown> {
@@ -279,6 +286,7 @@ async function getDraftFromTable(key: { project: string; draftId: string }): Pro
 async function applyWorkOrder(
   repoUrl: string,
   task: string,
+  target: TargetRepo,
   run: CommandRunner,
   paths: GoosePaths,
 ): Promise<{ status: string; diff: string; stdout: string; error?: string }> {
@@ -289,6 +297,8 @@ async function applyWorkOrder(
   }
   await writeFile(paths.taskPath, task, { mode: 0o600 });
   await chmod(paths.taskPath, 0o600);
+  await writeFile(paths.targetPath, `${target.owner}/${target.repo}\n`, { mode: 0o600 });
+  await chmod(paths.targetPath, 0o600);
   const gooseArgs = gooseArguments(paths.recipePath);
   let goose: CommandResult;
   try {

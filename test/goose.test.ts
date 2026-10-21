@@ -9,71 +9,79 @@ import { DEFAULT_STACK_NAME } from '../lib/stack-name.js';
 import type { DraftWrite } from '../lib/work-order.js';
 import {
   createGooseServer,
+  githubCloneUrl,
   gooseArguments,
   GOOSE_RECIPE_PATH,
   parseInvocation,
+  parseRepoRef,
+  selectTargetRepo,
   STDOUT_LIMIT,
-  workOrderHasRepo,
   type CommandRunner,
+  type GoosePaths,
 } from '../goose/server.js';
 
 jest.setTimeout(180_000);
 
 const HELLO = 'https://github.com/octocat/Hello-World';
-const HELLO_GIT = 'https://github.com/octocat/Hello-World.git';
 
-test.each([HELLO, HELLO_GIT])('accepts %s', (repoUrl) => {
-  const parsed = parseInvocation({ repoUrl, task: 'Add a line to README.md' });
-  expect(parsed).toEqual({ ok: true, repoUrl, task: 'Add a line to README.md' });
+test('accepts a stored draft', () => {
+  const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
+  expect(parsed).toEqual({ ok: true, project: 'acme', draftId: 'draft-1' });
 });
 
-test('accepts a work order longer than 4000 characters', () => {
-  const task = 'x'.repeat(7811);
-  const parsed = parseInvocation({ repoUrl: HELLO, task });
-  expect(parsed).toEqual({ ok: true, repoUrl: HELLO, task });
+test('accepts a stored draft with a repo selector', () => {
+  const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1', repo: 'octocat/Hello-World' });
+  expect(parsed).toEqual({ ok: true, project: 'acme', draftId: 'draft-1', repo: 'octocat/Hello-World' });
+});
+
+test.each(['', '   '])('rejects an empty project %j', (project) => {
+  const parsed = parseInvocation({ project, draftId: 'draft-1' });
+  expect(parsed.ok).toBe(false);
 });
 
 test.each([
-  ['https://user:token@github.com/octocat/Hello-World', 'userinfo'],
-  ['https://github.com/octocat/Hello-World?token=ghp_abc', 'query token'],
-  ['ssh://git@github.com/octocat/Hello-World', 'ssh'],
-  ['file:///tmp/repo', 'file'],
-  ['https://gitlab.com/octocat/Hello-World', 'host'],
-  ['git@github.com:octocat/Hello-World', 'git@'],
-])('rejects %s', (repoUrl) => {
-  const parsed = parseInvocation({ repoUrl, task: 'Add a line to README.md' });
+  ['https://github.com/octocat/Hello-World', 'url'],
+  ['octocat', 'missing name'],
+  ['octocat/Hello-World/extra', 'extra path'],
+  ['git@github.com:octocat/Hello-World', 'ssh'],
+])('rejects repo %s', (repo) => {
+  const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1', repo });
   expect(parsed.ok).toBe(false);
 });
 
-test('rejects an empty task', () => {
-  const parsed = parseInvocation({ repoUrl: HELLO, task: '' });
-  expect(parsed.ok).toBe(false);
+test('rejects repoUrl and task', () => {
+  expect(parseInvocation({ project: 'acme', draftId: 'draft-1', repoUrl: HELLO }).ok).toBe(false);
+  expect(parseInvocation({ project: 'acme', draftId: 'draft-1', task: 'edit the readme' }).ok).toBe(false);
+  expect(parseInvocation({ repoUrl: HELLO, task: 'edit the readme' }).ok).toBe(false);
 });
 
-test('accepts a stored draft', () => {
-  const parsed = parseInvocation({ repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
-  expect(parsed).toEqual({ ok: true, repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
+test('selects the only repo on the work order', () => {
+  expect(selectTargetRepo(sampleDraft())).toEqual({ ok: true, owner: 'octocat', repo: 'Hello-World' });
+  expect(githubCloneUrl({ owner: 'octocat', repo: 'Hello-World' })).toBe(HELLO);
 });
 
-test('rejects a draft payload that also has task', () => {
-  const parsed = parseInvocation({
-    repoUrl: HELLO,
-    project: 'acme',
-    draftId: 'draft-1',
-    task: 'Add a line to README.md',
+test('a named repo must be on the work order', () => {
+  expect(selectTargetRepo(sampleDraft(), 'octocat/Hello-World')).toEqual({
+    ok: true,
+    owner: 'octocat',
+    repo: 'Hello-World',
   });
-  expect(parsed.ok).toBe(false);
+  expect(selectTargetRepo(sampleDraft(), 'octocat/Spoon-Knife').ok).toBe(false);
 });
 
-test('rejects a draft without repoUrl', () => {
-  const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
-  expect(parsed.ok).toBe(false);
+test('more than one repo needs a selector', () => {
+  const draft = twoRepoDraft();
+  expect(selectTargetRepo(draft).ok).toBe(false);
+  expect(selectTargetRepo(draft, 'octocat/Spoon-Knife')).toEqual({
+    ok: true,
+    owner: 'octocat',
+    repo: 'Spoon-Knife',
+  });
 });
 
-test('a repoUrl must be on the work order', () => {
-  expect(workOrderHasRepo(sampleDraft(), HELLO)).toBe(true);
-  expect(workOrderHasRepo(sampleDraft(), HELLO_GIT)).toBe(true);
-  expect(workOrderHasRepo(sampleDraft(), 'https://github.com/octocat/Spoon-Knife')).toBe(false);
+test('parseRepoRef accepts owner/repo only', () => {
+  expect(parseRepoRef('octocat/Hello-World')).toEqual({ ok: true, owner: 'octocat', repo: 'Hello-World' });
+  expect(parseRepoRef('https://github.com/octocat/Hello-World').ok).toBe(false);
 });
 
 test('goose runs from an argument array with the developer builtin and no gateway', () => {
@@ -99,16 +107,14 @@ test('goose runs from an argument array with the developer builtin and no gatewa
 
 test('an invocation spawns git and goose with argument arrays and returns the diff', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
-  const taskPath = join(root, 'task.md');
-  const workspace = join(root, 'workspace');
+  const paths = testPaths(root);
   const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
-  const task = 'y'.repeat(7811);
   const run: CommandRunner = async (command, args, cwd) => {
     calls.push({ command, args, cwd });
     if (command === 'goose') {
-      const mode = (await stat(taskPath)).mode & 0o777;
+      const mode = (await stat(paths.taskPath)).mode & 0o777;
       expect(mode).toBe(0o600);
-      expect(args.join(' ')).not.toContain(task);
+      expect(await readFile(paths.targetPath, 'utf8')).toBe('octocat/Hello-World\n');
       return { code: 0, stdout: 'z'.repeat(STDOUT_LIMIT + 50), stderr: '' };
     }
     if (command === 'git' && args[0] === 'diff') {
@@ -116,7 +122,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, { recipePath: GOOSE_RECIPE_PATH, taskPath, workspace });
+  const server = createGooseServer(run, paths, async () => sampleDraft());
   const port = await listen(server);
   try {
     const health = await getJson(port, '/health');
@@ -124,7 +130,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     expect(health.body).toMatchObject({ status: 'Healthy' });
     expect(typeof health.body.time_of_last_update).toBe('number');
 
-    const response = await postJson(port, { repoUrl: HELLO, task });
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'success',
@@ -137,10 +143,10 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   }
 
   const clone = calls.find((call) => call.command === 'git' && call.args[0] === 'clone');
-  expect(clone?.args).toEqual(['clone', '--depth', '1', HELLO, workspace]);
+  expect(clone?.args).toEqual(['clone', '--depth', '1', HELLO, paths.workspace]);
   const goose = calls.find((call) => call.command === 'goose');
   expect(goose?.args).toEqual(gooseArguments().slice(1));
-  expect(goose?.cwd).toBe(workspace);
+  expect(goose?.cwd).toBe(paths.workspace);
   expect(calls.some((call) => call.args.some((arg) => /gateway/i.test(arg)))).toBe(false);
 });
 
@@ -155,14 +161,10 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, {
-    recipePath: GOOSE_RECIPE_PATH,
-    taskPath: join(root, 'task.md'),
-    workspace: join(root, 'workspace'),
-  });
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
   const port = await listen(server);
   try {
-    const response = await postJson(port, { repoUrl: HELLO, task: 'edit the readme' });
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(200);
     expect(response.body.status).toBe('error');
     expect(response.body.diff).toBe('diff --git a/README.md\n');
@@ -176,11 +178,11 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
 
 test('a stored draft is formatted as the work order Goose reads', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
-  const taskPath = join(root, 'task.md');
+  const paths = testPaths(root);
   const draft = sampleDraft();
   const run: CommandRunner = async (command, args) => {
     if (command === 'goose') {
-      const task = await readFile(taskPath, 'utf8');
+      const task = await readFile(paths.taskPath, 'utf8');
       expect(task).toContain('Draft: draft-1');
       expect(task).toContain('Add a Smoke line to README.md');
       expect(task).toContain('octocat/Hello-World');
@@ -191,17 +193,13 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(
-    run,
-    { recipePath: GOOSE_RECIPE_PATH, taskPath, workspace: join(root, 'workspace') },
-    async (key) => {
-      expect(key).toEqual({ project: 'acme', draftId: 'draft-1' });
-      return draft;
-    },
-  );
+  const server = createGooseServer(run, paths, async (key) => {
+    expect(key).toEqual({ project: 'acme', draftId: 'draft-1' });
+    return draft;
+  });
   const port = await listen(server);
   try {
-    const response = await postJson(port, { repoUrl: HELLO, project: 'acme', draftId: 'draft-1' });
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ status: 'success', diff: 'diff --git a/README.md\n' });
   } finally {
@@ -215,16 +213,12 @@ test('a missing draft is HTTP 200 with an error', async () => {
     async () => {
       throw new Error('should not run');
     },
-    {
-      recipePath: GOOSE_RECIPE_PATH,
-      taskPath: '/tmp/unused-task.md',
-      workspace: '/tmp/unused-workspace',
-    },
+    unusedPaths(),
     async () => undefined,
   );
   const port = await listen(server);
   try {
-    const response = await postJson(port, { repoUrl: HELLO, project: 'acme', draftId: 'missing' });
+    const response = await postJson(port, { project: 'acme', draftId: 'missing' });
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({ status: 'error', error: 'No draft with that id.' });
   } finally {
@@ -237,19 +231,15 @@ test('a repo that is not on the work order is HTTP 400', async () => {
     async () => {
       throw new Error('should not run');
     },
-    {
-      recipePath: GOOSE_RECIPE_PATH,
-      taskPath: '/tmp/unused-task.md',
-      workspace: '/tmp/unused-workspace',
-    },
+    unusedPaths(),
     async () => sampleDraft(),
   );
   const port = await listen(server);
   try {
     const response = await postJson(port, {
-      repoUrl: 'https://github.com/octocat/Spoon-Knife',
       project: 'acme',
       draftId: 'draft-1',
+      repo: 'octocat/Spoon-Knife',
     });
     expect(response.statusCode).toBe(400);
     expect(response.body.status).toBe('error');
@@ -259,13 +249,65 @@ test('a repo that is not on the work order is HTTP 400', async () => {
   }
 });
 
+test('a multi-repo order without a selector is HTTP 400', async () => {
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    unusedPaths(),
+    async () => twoRepoDraft(),
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(400);
+    expect(response.body.error).toContain('more than one repository');
+  } finally {
+    await close(server);
+  }
+});
+
+test('a multi-repo order with a selector clones that repo', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const paths = testPaths(root);
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, paths, async () => twoRepoDraft());
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, {
+      project: 'acme',
+      draftId: 'draft-1',
+      repo: 'octocat/Spoon-Knife',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body.status).toBe('success');
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.find((call) => call.command === 'git' && call.args[0] === 'clone')?.args).toEqual([
+    'clone',
+    '--depth',
+    '1',
+    'https://github.com/octocat/Spoon-Knife',
+    paths.workspace,
+  ]);
+});
+
 test('validation failure is HTTP 400', async () => {
   const server = createGooseServer(async () => {
     throw new Error('should not run');
   });
   const port = await listen(server);
   try {
-    const response = await postJson(port, { repoUrl: 'ssh://git@github.com/octocat/Hello-World', task: '' });
+    const response = await postJson(port, { repoUrl: HELLO, task: 'edit the readme' });
     expect(response.statusCode).toBe(400);
     expect(response.body.status).toBe('error');
   } finally {
@@ -289,14 +331,10 @@ test('while goose is running, ping is HealthyBusy', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, {
-    recipePath: GOOSE_RECIPE_PATH,
-    taskPath: join(root, 'task.md'),
-    workspace: join(root, 'workspace'),
-  });
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
   port = await listen(server);
   try {
-    const pending = postJson(port, { repoUrl: HELLO, task: 'edit the readme' });
+    const pending = postJson(port, { project: 'acme', draftId: 'draft-1' });
     await gate;
     const response = await pending;
     expect(response.body.status).toBe('success');
@@ -353,6 +391,38 @@ test('the minivela stack includes the goose runtime', () => {
   expect(policy).not.toContain('s3:');
   expect(JSON.stringify(template.toJSON())).not.toContain('goose_smoke');
 });
+
+function twoRepoDraft(): DraftWrite {
+  const draft = sampleDraft();
+  return {
+    ...draft,
+    workOrder: {
+      ...draft.workOrder,
+      repos: [
+        { owner: 'octocat', repo: 'Hello-World' },
+        { owner: 'octocat', repo: 'Spoon-Knife' },
+      ],
+    },
+  };
+}
+
+function testPaths(root: string): GoosePaths {
+  return {
+    recipePath: GOOSE_RECIPE_PATH,
+    taskPath: join(root, 'task.md'),
+    targetPath: join(root, 'target'),
+    workspace: join(root, 'workspace'),
+  };
+}
+
+function unusedPaths(): GoosePaths {
+  return {
+    recipePath: GOOSE_RECIPE_PATH,
+    taskPath: '/tmp/unused-task.md',
+    targetPath: '/tmp/unused-target',
+    workspace: '/tmp/unused-workspace',
+  };
+}
 
 function sampleDraft(): DraftWrite {
   return {
