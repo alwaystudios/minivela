@@ -138,6 +138,21 @@ aws bedrock-agentcore invoke-agent-runtime \
   outfile.json
 ```
 
+Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. Pass `project` and `draftId` to load a stored work order. This invoke applies one repository. When the order names one repo, that is the clone. When it names more than one, pass `repo` as `owner/repo`. Goose edits a shallow clone and does not push. The body is `{ status, response }` like the agent. `response` holds `diff` and `stdout`. An empty diff is `status: error`. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
+
+```bash
+SESSION=$(uuidgen)
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn <goose-runtime-arn> \
+  --runtime-session-id "$SESSION" \
+  --payload '{"project":"acme","draftId":"<draft-id>"}' \
+  --qualifier DEFAULT \
+  --profile my-profile \
+  --region us-east-1 \
+  --cli-binary-format raw-in-base64-out \
+  outfile.json
+```
+
 Deploy prints `KnowledgeBaseId`. Direct retrieve is for debugging the index. A retrieve for `demo` includes `global`. Omit the filter and every client's chunks can come back.
 
 ```bash
@@ -195,7 +210,7 @@ aws dynamodb query \
   --region us-east-1
 ```
 
-The stack grants the agent its own role. The profile you use on these commands needs a separate identity policy. An IAM inline policy is capped at 2048 characters, so keep it one compact document. Fill in deploy outputs. `InvokeAgentRuntime` needs the runtime ARN and `/runtime-endpoint/DEFAULT`.
+The stack grants the agent its own role. The profile you use on these commands needs a separate identity policy. An IAM inline policy is capped at 2048 characters, so keep it one compact document. Fill in the region, account, stack name, and bucket names. `InvokeAgentRuntime` covers both runtimes.
 
 ```json
 {
@@ -203,13 +218,7 @@ The stack grants the agent its own role. The profile you use on these commands n
   "Statement": [
     {
       "Effect": "Allow",
-      "Action": [
-        "dynamodb:Query",
-        "dynamodb:GetItem",
-        "dynamodb:PutItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:BatchWriteItem"
-      ],
+      "Action": ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"],
       "Resource": "arn:aws:dynamodb:<region>:<account>:table/<stackName>-*"
     },
     {
@@ -219,41 +228,21 @@ The stack grants the agent its own role. The profile you use on these commands n
     },
     {
       "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::<documents-bucket>"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:AbortMultipartUpload"
-      ],
-      "Resource": "arn:aws:s3:::<documents-bucket>/*"
+      "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": ["arn:aws:s3:::<documents-bucket>", "arn:aws:s3:::<documents-bucket>/*"]
     },
     {
       "Effect": "Allow",
       "Action": "bedrock-agentcore:InvokeAgentRuntime",
       "Resource": [
-        "<agent-runtime-arn>",
-        "<agent-runtime-arn>/runtime-endpoint/DEFAULT"
+        "arn:aws:bedrock-agentcore:<region>:<account>:runtime/*",
+        "arn:aws:bedrock-agentcore:<region>:<account>:runtime/*/runtime-endpoint/DEFAULT"
       ]
     },
     {
       "Effect": "Allow",
-      "Action": [
-        "bedrock:GetKnowledgeBase",
-        "bedrock:GetDataSource",
-        "bedrock:ListIngestionJobs",
-        "bedrock:GetIngestionJob",
-        "bedrock:StartIngestionJob",
-        "bedrock:Retrieve"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:<region>:<account>:knowledge-base/<knowledge-base-id>",
-        "arn:aws:bedrock:<region>:<account>:knowledge-base/<knowledge-base-id>/data-source/<data-source-id>"
-      ]
+      "Action": ["bedrock:GetKnowledgeBase", "bedrock:GetDataSource", "bedrock:ListIngestionJobs", "bedrock:GetIngestionJob", "bedrock:StartIngestionJob", "bedrock:Retrieve"],
+      "Resource": "arn:aws:bedrock:<region>:<account>:knowledge-base/*"
     }
   ]
 }
