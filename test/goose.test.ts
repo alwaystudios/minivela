@@ -555,6 +555,109 @@ test('an empty diff after Goose exits 0 is an error', async () => {
   expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
   expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
   expect(calls.some((call) => call.command === 'npm')).toBe(false);
+  expect(calls.filter((call) => call.command === 'goose')).toHaveLength(1);
+});
+
+const DSML_FUNCTION_CALLS = '<｜DSML｜function_calls';
+const DSML_INVOKE = '<｜DSML｜invoke name="shell">';
+
+test('an unparsed tool call is run once more and a later diff is pushed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const rows: SdlcRunRow[] = [];
+  let gooseRuns = 0;
+  let diffs = 0;
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      gooseRuns += 1;
+      const text = gooseRuns === 1 ? `\n\n${DSML_FUNCTION_CALLS}` : 'edited the checkout';
+      return { code: 0, stdout: gooseJson(text), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      diffs += 1;
+      return { code: 0, stdout: diffs === 1 ? '' : 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'success',
+      response: { diff: 'diff --git a/README.md\n', branch: 'goose/draft-1', stdout: 'edited the checkout' },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: 'success', branch: 'goose/draft-1' });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.filter((call) => call.command === 'goose')).toHaveLength(2);
+  expect(calls.filter((call) => call.command === 'git' && call.args[0] === 'clone')).toHaveLength(1);
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(true);
+});
+
+test('a second unparsed tool call is an error and does not push', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const rows: SdlcRunRow[] = [];
+  const logs: string[] = [];
+  const logSpy = jest.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+    logs.push(String(line));
+  });
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson(`\n${DSML_INVOKE}`), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  try {
+    const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+      rows.push(row);
+    });
+    const port = await listen(server);
+    try {
+      const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        status: 'error',
+        response: { diff: '', error: 'unparsed tool call' },
+      });
+      expect(response.body.response?.stdout).toContain(DSML_INVOKE);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ status: 'error', draftId: 'draft-1' });
+      expect(rows[0]).not.toHaveProperty('branch');
+      expect(parseApplyLog(logs)).toMatchObject({
+        gooseExit: 0,
+        reason: 'unparsed tool call',
+        status: 'error',
+      });
+    } finally {
+      await close(server);
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(calls.filter((call) => call.command === 'goose')).toHaveLength(2);
+    expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+    expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+    expect(calls.some((call) => call.command === 'npm')).toBe(false);
+  } finally {
+    logSpy.mockRestore();
+  }
 });
 
 test('an existing goose branch is an error and does not push', async () => {
