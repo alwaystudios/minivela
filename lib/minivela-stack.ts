@@ -442,7 +442,12 @@ export class MinivelaStack extends cdk.Stack {
     goose.role.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-        resources: [`arn:aws:bedrock:${cdk.Aws.REGION}::foundation-model/${GOOSE_MODEL_ID}`],
+        resources: [
+          `arn:aws:bedrock:${cdk.Aws.REGION}:${cdk.Aws.ACCOUNT_ID}:inference-profile/${GOOSE_MODEL_ID}`,
+          ...BEDROCK_REGIONS.map(
+            (region) => `arn:aws:bedrock:${region}::foundation-model/anthropic.claude-sonnet-4-6*`,
+          ),
+        ],
       }),
     );
     goose.role.addToPrincipalPolicy(

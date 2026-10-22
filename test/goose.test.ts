@@ -197,10 +197,10 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     expect(rows[0]).toMatchObject({
       project: 'acme',
       step: 'goose',
-      model: 'deepseek.v3.2',
+      model: 'us.anthropic.claude-sonnet-4-6',
       inputTokens: 1_000_000,
       outputTokens: 1_000_000,
-      estimatedUsd: 2.47,
+      estimatedUsd: 18,
       status: 'success',
       draftId: 'draft-1',
       repoUrl: HELLO,
@@ -1119,7 +1119,8 @@ test('the minivela stack includes the goose runtime', () => {
   );
   const policy = JSON.stringify(policies);
   expect(policy).toContain('bedrock:InvokeModel');
-  expect(policy).toContain(`foundation-model/${GOOSE_MODEL_ID}`);
+  expect(policy).toContain(`inference-profile/${GOOSE_MODEL_ID}`);
+  expect(policy).toContain('foundation-model/anthropic.claude-sonnet-4-6');
   expect(policy).toContain('dynamodb:GetItem');
   expect(policy).toContain('dynamodb:PutItem');
   expect(policy).not.toContain('bedrock:Retrieve');
