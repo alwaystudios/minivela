@@ -26,4 +26,4 @@ extensions:
 settings:
   goose_provider: aws_bedrock
   goose_model: deepseek.v3.2
-  max_turns: 30
+  max_turns: 120

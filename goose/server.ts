@@ -213,7 +213,7 @@ export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
     '--recipe',
     recipePath,
     '--max-turns',
-    '30',
+    '120',
     '--quiet',
     '--with-builtin',
     'developer',
