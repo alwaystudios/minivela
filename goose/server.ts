@@ -242,6 +242,14 @@ async function handleInvocation(
   try {
     try {
       await readGitPat(parsed.project, readSecret);
+      console.log(
+        JSON.stringify({
+          project: parsed.project,
+          draftId: parsed.draftId,
+          secretId: projectSecretName(parsed.project, GIT_PAT),
+          status: 'loaded',
+        }),
+      );
     } catch (error) {
       const message =
         error instanceof Error

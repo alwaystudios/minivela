@@ -113,6 +113,11 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   const paths = testPaths(root);
   const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
   const reads: Array<{ project: string; name: string }> = [];
+  const logs: string[] = [];
+  const logSpy = jest.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+    logs.push(String(line));
+  });
+  try {
   const run: CommandRunner = async (command, args, cwd) => {
     calls.push({ command, args, cwd });
     if (command === 'goose') {
@@ -167,6 +172,18 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   expect(calls.some((call) => call.args.some((arg) => /gateway/i.test(arg)))).toBe(false);
   expect(JSON.stringify(calls)).not.toContain(TEST_GIT_PAT);
   expect(reads).toEqual([{ project: 'acme', name: 'git-pat' }]);
+  expect(logs).toContain(
+    JSON.stringify({
+      project: 'acme',
+      draftId: 'draft-1',
+      secretId: 'minivela/acme/git-pat',
+      status: 'loaded',
+    }),
+  );
+  expect(logs.join('\n')).not.toContain(TEST_GIT_PAT);
+  } finally {
+    logSpy.mockRestore();
+  }
 });
 
 test('a missing git-pat stops before clone and Goose', async () => {
