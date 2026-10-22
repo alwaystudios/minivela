@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
+import { estimateSdlcRun } from '../sdlc-run.js';
 import type { RetrievedDecision } from '../search-decisions.js';
 import type { Repo } from '../lookup.js';
-import type { AnswerResult, RetrievedChunk } from './answer.js';
+import { AnswerModelUsageError, type AnswerResult, type AnswerStatus, type CheckReadinessRun, type ReadinessModelCompletion, type RetrievedChunk } from './answer.js';
 
 export async function checkReadiness(input: {
   prompt: string;
@@ -15,7 +17,8 @@ export async function checkReadiness(input: {
     chunks: RetrievedChunk[];
     decisions: RetrievedDecision[];
     repos: Repo[];
-  }) => Promise<string>;
+  }) => Promise<string | ReadinessModelCompletion>;
+  putRun: (row: CheckReadinessRun) => Promise<void>;
 }): Promise<AnswerResult> {
   const chunksPromise = input.ticketDocument
     ? Promise.resolve([input.ticketDocument])
@@ -41,14 +44,60 @@ export async function checkReadiness(input: {
   if (repos.length === 0) {
     return { response: 'The repo map is empty.', status: 'refused' };
   }
-  const response = await input.complete({
-    prompt: input.prompt,
-    project: input.project,
-    chunks,
-    decisions,
-    repos,
+  let completed: string | ReadinessModelCompletion;
+  try {
+    completed = await input.complete({
+      prompt: input.prompt,
+      project: input.project,
+      chunks,
+      decisions,
+      repos,
+    });
+  } catch (error) {
+    if (error instanceof AnswerModelUsageError) {
+      return { response: 'The readiness model returned no token counts.', status: 'error' };
+    }
+    throw error;
+  }
+  const text = typeof completed === 'string' ? completed : completed.text;
+  const usage = typeof completed === 'string' ? undefined : completed;
+  const status: AnswerStatus = 'success';
+  await recordReadinessRun(input, usage, status);
+  return { response: text, status };
+}
+
+async function recordReadinessRun(
+  input: { project: string; putRun: (row: CheckReadinessRun) => Promise<void> },
+  usage: ReadinessModelCompletion | undefined,
+  status: AnswerStatus,
+): Promise<void> {
+  if (usage === undefined) {
+    return;
+  }
+  const priced = estimateSdlcRun({
+    modelId: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
   });
-  return { response, status: 'success' };
+  if (!('estimatedUsd' in priced)) {
+    return;
+  }
+  try {
+    await input.putRun({
+      project: input.project,
+      runId: randomUUID(),
+      step: 'check-readiness',
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd: priced.estimatedUsd,
+      startedAt: usage.startedAt,
+      finishedAt: usage.finishedAt,
+      status,
+    });
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 export const READINESS_SYSTEM_PROMPT =

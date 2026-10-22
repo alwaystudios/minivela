@@ -1,4 +1,4 @@
-import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
+import { answerFromMemory, answerCompletionFromModel, parseInvokePayload, type AnswerRun, type CheckReadinessRun } from '../lib/agent/answer.js';
 import { promptForInvoke, readTicketMarkdown } from '../lib/ticket.js';
 import {
   DRAFT_SYSTEM_PROMPT,
@@ -13,6 +13,8 @@ import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
 const ignoreRuns = async (_row: DraftWorkOrderRun): Promise<void> => undefined;
+const ignoreAnswerRuns = async (_row: AnswerRun): Promise<void> => undefined;
+const ignoreReadinessRuns = async (_row: CheckReadinessRun): Promise<void> => undefined;
 
 const sonnetUsage = {
   model: 'us.anthropic.claude-sonnet-4-6',
@@ -262,6 +264,7 @@ test('answer uses retrieved decisions and documents for that project', async () 
     retrieve,
     searchDecisions,
     complete,
+    putRun: ignoreAnswerRuns,
   });
   expect(retrieve).toHaveBeenCalledWith({ prompt: 'the export RFC', project: 'acme' });
   expect(searchDecisions).toHaveBeenCalledWith({ prompt: 'the export RFC', project: 'acme' });
@@ -298,6 +301,7 @@ test('a failed decision search still answers from documents', async () => {
       retrieve,
       searchDecisions,
       complete,
+      putRun: ignoreAnswerRuns,
     });
     expect(complete).toHaveBeenCalledWith({
       prompt: 'the export RFC',
@@ -332,6 +336,7 @@ test('check-readiness loads repos, decisions, and documents', async () => {
     searchDecisions,
     loadRepos,
     complete,
+    putRun: ignoreReadinessRuns,
   });
   expect(loadRepos).toHaveBeenCalledWith('acme');
   expect(complete).toHaveBeenCalledWith(
@@ -354,6 +359,7 @@ test('check-readiness stops when the repo map is empty', async () => {
     searchDecisions: jest.fn().mockResolvedValue([]),
     loadRepos: jest.fn().mockResolvedValue([]),
     complete,
+    putRun: ignoreReadinessRuns,
   });
   expect(complete).not.toHaveBeenCalled();
   expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
@@ -370,6 +376,7 @@ test('check-readiness stops when the repo map fails to load', async () => {
       searchDecisions: jest.fn().mockResolvedValue([]),
       loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
       complete,
+      putRun: ignoreReadinessRuns,
     });
     expect(complete).not.toHaveBeenCalled();
     expect(result).toEqual({ response: 'The repo map failed to load.', status: 'refused' });
@@ -927,3 +934,127 @@ test('draft-work-order does not store when the model is blocked', async () => {
   });
 });
 
+
+const sonnetReadinessUsage = {
+  model: 'us.anthropic.claude-sonnet-4-6',
+  startedAt: '2026-10-22T15:00:00.000Z',
+  finishedAt: '2026-10-22T15:00:01.000Z',
+};
+
+test('a check-readiness whose model response has both counts writes one row with step check-readiness', async () => {
+  const rows: CheckReadinessRun[] = [];
+  const result = await checkReadiness({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: async () =>
+      ({ text: 'Ready. Target acme/web.', ...sonnetReadinessUsage, inputTokens: 500_000, outputTokens: 200_000 }),
+    putRun: async (row) => { rows.push(row); },
+  });
+  expect(result.status).toBe('success');
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    step: 'check-readiness',
+    model: 'us.anthropic.claude-sonnet-4-6',
+    inputTokens: 500_000,
+    outputTokens: 200_000,
+    estimatedUsd: expect.any(Number),
+    startedAt: sonnetReadinessUsage.startedAt,
+    finishedAt: sonnetReadinessUsage.finishedAt,
+    status: 'success',
+    project: 'acme',
+    runId: expect.any(String),
+  });
+  expect(rows[0].estimatedUsd).toBeGreaterThan(0);
+  expect(rows[0]).not.toHaveProperty('prompt');
+  expect(rows[0]).not.toHaveProperty('draftId');
+  expect(rows[0]).not.toHaveProperty('breakdownId');
+  expect(rows[0]).not.toHaveProperty('branch');
+  expect(rows[0]).not.toHaveProperty('grade');
+});
+
+test('an empty repo map on check-readiness writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await checkReadiness({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([]),
+    complete: jest.fn(),
+    putRun,
+  });
+  expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('a plain answer whose model response has both counts writes one row with step answer', async () => {
+  const rows: AnswerRun[] = [];
+  const result = await answerFromMemory({
+    prompt: 'the export RFC',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    complete: async () =>
+      answerCompletionFromModel({
+        text: 'CSV only.',
+        model: 'us.anthropic.claude-sonnet-4-6',
+        usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+        startedAt: '2026-10-22T15:00:00.000Z',
+        finishedAt: '2026-10-22T15:00:01.000Z',
+      }),
+    putRun: async (row) => { rows.push(row); },
+  });
+  expect(result.status).toBe('success');
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
+    step: 'answer',
+    model: 'us.anthropic.claude-sonnet-4-6',
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+    estimatedUsd: 18,
+    status: 'success',
+    project: 'acme',
+    runId: expect.any(String),
+  });
+  expect(rows[0]).not.toHaveProperty('draftId');
+  expect(rows[0]).not.toHaveProperty('breakdownId');
+  expect(rows[0]).not.toHaveProperty('branch');
+  expect(rows[0]).not.toHaveProperty('repoUrl');
+});
+
+test('a fetch by draftId writes no row and a fetch by breakdownId writes no row', async () => {
+  const putRun = jest.fn();
+  const draftResult = await fetchStoredDraft({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    get: jest.fn().mockResolvedValue(storedDraft),
+    loadDecisions: jest.fn(),
+    putRun,
+  });
+  expect(draftResult.status).toBe('success');
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('a model response with no input_tokens on answer is status error and writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await answerFromMemory({
+    prompt: 'the export RFC',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    complete: async () =>
+      answerCompletionFromModel({
+        text: 'CSV only.',
+        model: 'us.anthropic.claude-sonnet-4-6',
+        usage: { output_tokens: 12 },
+        startedAt: '2026-10-22T15:00:00.000Z',
+        finishedAt: '2026-10-22T15:00:01.000Z',
+      }),
+    putRun,
+  });
+  expect(result).toEqual({ response: 'The answer model returned no token counts.', status: 'error' });
+  expect(putRun).not.toHaveBeenCalled();
+});
