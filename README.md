@@ -24,11 +24,14 @@ flowchart TB
   agent --> kb
   agent --> bedrock
   agent --> decisions
-  agent --> tables[(DynamoDB rules, repos, drafts, breakdowns, templates)]
+  agent --> tables[(DynamoDB rules, repos, breakdowns, templates)]
+  agent --> drafts[(DynamoDB drafts)]
   agent --> documents
 
   goose --> bedrock
-  goose --> tables
+  goose --> drafts
+  goose --> secrets[(Secrets Manager)]
+  goose --> github[GitHub]
 ```
 
 ## Provision
