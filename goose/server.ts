@@ -22,7 +22,14 @@ export type CommandResult = {
   stderr: string;
 };
 
-export type CommandRunner = (command: string, args: string[], cwd?: string) => Promise<CommandResult>;
+export type CommandEnv = Record<string, string>;
+
+export type CommandRunner = (
+  command: string,
+  args: string[],
+  cwd?: string,
+  extraEnv?: CommandEnv,
+) => Promise<CommandResult>;
 
 export type GoosePaths = {
   recipePath: string;
@@ -37,6 +44,17 @@ export type SecretReader = (project: string, name: string) => Promise<string>;
 
 const GIT_PAT = 'git-pat';
 
+export const GOOSE_ASKPASS_PATH = '/tmp/goose-askpass';
+export const GOOSE_GIT_NAME = 'Goose';
+export const GOOSE_GIT_EMAIL = 'goose@minivela';
+
+const ASKPASS_SCRIPT = `#!/bin/sh
+case "$1" in
+*[Uu]sername*) echo x-access-token ;;
+*) printf '%s\\n' "$GOOSE_GIT_PAT" ;;
+esac
+`;
+
 export type ParsedInvocation =
   | { ok: true; project: string; draftId: string; repo?: string }
   | { ok: false; error: string };
@@ -45,15 +63,19 @@ export type TargetRepo = { owner: string; repo: string };
 
 export type GooseInvokeResult = {
   status: 'success' | 'error';
-  response: { diff?: string; stdout?: string; error?: string };
+  response: { diff?: string; stdout?: string; error?: string; branch?: string };
 };
 
 function failed(error: string, extra?: { diff?: string; stdout?: string }): GooseInvokeResult {
   return { status: 'error', response: { ...extra, error } };
 }
 
-function succeeded(diff: string, stdout: string): GooseInvokeResult {
-  return { status: 'success', response: { diff, stdout } };
+function succeeded(diff: string, stdout: string, branch: string): GooseInvokeResult {
+  return { status: 'success', response: { diff, stdout, branch } };
+}
+
+export function gooseBranch(draftId: string): string {
+  return `goose/${draftId}`;
 }
 
 export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
@@ -240,8 +262,9 @@ async function handleInvocation(
   }
   setBusy(true);
   try {
+    let token: string;
     try {
-      await readGitPat(parsed.project, readSecret);
+      token = await readGitPat(parsed.project, readSecret);
       console.log(
         JSON.stringify({
           project: parsed.project,
@@ -259,12 +282,16 @@ async function handleInvocation(
       json(res, 200, failed(message, { diff: '', stdout: '' }));
       return;
     }
-    const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths);
+    const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths, {
+      token,
+      draftId: parsed.draftId,
+    });
     console.log(
       JSON.stringify({
         project: parsed.project,
         draftId: parsed.draftId,
         repo: `${loaded.target.owner}/${loaded.target.repo}`,
+        ...(result.response.branch === undefined ? {} : { branch: result.response.branch }),
         status: result.status,
       }),
     );
@@ -308,11 +335,12 @@ async function resolveTask(
   };
 }
 
-async function readGitPat(project: string, readSecret: SecretReader): Promise<void> {
+async function readGitPat(project: string, readSecret: SecretReader): Promise<string> {
   const secret = await readSecret(project, GIT_PAT);
   if (secret.length === 0) {
     throw new Error(`project secret ${projectSecretName(project, GIT_PAT)} is missing or unreadable`);
   }
+  return secret;
 }
 
 async function getDraftFromTable(key: { project: string; draftId: string }): Promise<unknown> {
@@ -336,6 +364,7 @@ async function applyWorkOrder(
   target: TargetRepo,
   run: CommandRunner,
   paths: GoosePaths,
+  apply: { token: string; draftId: string },
 ): Promise<GooseInvokeResult> {
   await rm(paths.workspace, { recursive: true, force: true });
   const clone = await run('git', ['clone', '--depth', '1', repoUrl, paths.workspace]);
@@ -377,7 +406,49 @@ async function applyWorkOrder(
   if (diff.stdout.trim().length === 0) {
     return failed('Goose made no changes', { diff: '', stdout });
   }
-  return succeeded(diff.stdout, stdout);
+  const branch = gooseBranch(apply.draftId);
+  const remote = await run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], paths.workspace);
+  if (remote.code !== 0) {
+    return failed(commandFailure('git ls-remote', remote), { diff: diff.stdout, stdout });
+  }
+  if (remote.stdout.trim().length > 0) {
+    return failed(`branch ${branch} already exists`, { diff: diff.stdout, stdout });
+  }
+  const checkout = await run('git', ['checkout', '-b', branch], paths.workspace);
+  if (checkout.code !== 0) {
+    return failed(commandFailure('git checkout', checkout), { diff: diff.stdout, stdout });
+  }
+  const reset = await run('git', ['reset', '--soft', base], paths.workspace);
+  if (reset.code !== 0) {
+    return failed(commandFailure('git reset', reset), { diff: diff.stdout, stdout });
+  }
+  const commit = await run(
+    'git',
+    [
+      '-c',
+      `user.name=${GOOSE_GIT_NAME}`,
+      '-c',
+      `user.email=${GOOSE_GIT_EMAIL}`,
+      'commit',
+      '-m',
+      `Apply draft ${apply.draftId}`,
+    ],
+    paths.workspace,
+  );
+  if (commit.code !== 0) {
+    return failed(commandFailure('git commit', commit), { diff: diff.stdout, stdout });
+  }
+  await writeFile(GOOSE_ASKPASS_PATH, ASKPASS_SCRIPT, { mode: 0o700 });
+  await chmod(GOOSE_ASKPASS_PATH, 0o700);
+  const push = await run('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], paths.workspace, {
+    GIT_ASKPASS: GOOSE_ASKPASS_PATH,
+    GIT_TERMINAL_PROMPT: '0',
+    GOOSE_GIT_PAT: apply.token,
+  });
+  if (push.code !== 0) {
+    return failed(commandFailure('git push', push), { diff: diff.stdout, stdout });
+  }
+  return succeeded(diff.stdout, stdout, branch);
 }
 
 function commandFailure(command: string, result: CommandResult): string {
@@ -406,9 +477,18 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function spawnCommand(command: string, args: string[], cwd?: string): Promise<CommandResult> {
+function spawnCommand(
+  command: string,
+  args: string[],
+  cwd?: string,
+  extraEnv?: CommandEnv,
+): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, shell: false });
+    const child = spawn(command, args, {
+      cwd,
+      shell: false,
+      env: extraEnv === undefined ? undefined : { ...process.env, ...extraEnv },
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => {

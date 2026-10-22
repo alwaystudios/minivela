@@ -2,7 +2,7 @@
 
 Minivela is the open-source, self-hosted baby brother of [Supervela](https://www.supervela.com). It keeps project memory, breaks one page into an epic and its stories, and drafts a one-shot work-order prompt from a Jira ticket and the knowledge base: meeting decisions, notes, and handbooks.
 
-The same stack runs [Goose](https://goose-docs.ai/) in a second AgentCore runtime. Pass a stored work-order draft. Goose edits a shallow clone of one repository on that order and the runtime returns the diff.
+The same stack runs [Goose](https://goose-docs.ai/) in a second AgentCore runtime. Pass a stored work-order draft. Goose edits a shallow clone of one repository on that order, pushes `goose/<draftId>`, and returns the branch and the diff.
 
 ## Components
 

@@ -11,6 +11,10 @@ import {
   createGooseServer,
   githubCloneUrl,
   gooseArguments,
+  gooseBranch,
+  GOOSE_ASKPASS_PATH,
+  GOOSE_GIT_EMAIL,
+  GOOSE_GIT_NAME,
   GOOSE_RECIPE_PATH,
   parseInvocation,
   parseRepoRef,
@@ -87,6 +91,10 @@ test('parseRepoRef accepts owner/repo only', () => {
   expect(parseRepoRef('https://github.com/octocat/Hello-World').ok).toBe(false);
 });
 
+test('the pushed branch is goose/<draftId>', () => {
+  expect(gooseBranch('draft-1')).toBe('goose/draft-1');
+});
+
 test('goose runs from an argument array with the developer builtin and no gateway', () => {
   const args = gooseArguments();
   expect(Array.isArray(args)).toBe(true);
@@ -111,15 +119,15 @@ test('goose runs from an argument array with the developer builtin and no gatewa
 test('an invocation spawns git and goose with argument arrays and returns the diff', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
   const paths = testPaths(root);
-  const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+  const calls: Array<{ command: string; args: string[]; cwd?: string; env?: Record<string, string> }> = [];
   const reads: Array<{ project: string; name: string }> = [];
   const logs: string[] = [];
   const logSpy = jest.spyOn(console, 'log').mockImplementation((line?: unknown) => {
     logs.push(String(line));
   });
   try {
-  const run: CommandRunner = async (command, args, cwd) => {
-    calls.push({ command, args, cwd });
+  const run: CommandRunner = async (command, args, cwd, env) => {
+    calls.push({ command, args, cwd, env });
     if (command === 'goose') {
       const mode = (await stat(paths.taskPath)).mode & 0o777;
       expect(mode).toBe(0o600);
@@ -150,7 +158,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'success',
-      response: { diff: 'diff --git a/README.md\n' },
+      response: { diff: 'diff --git a/README.md\n', branch: 'goose/draft-1' },
     });
     expect(response.body.response?.stdout).toHaveLength(STDOUT_LIMIT);
     expect(response.body.response?.stdout).not.toContain(TEST_GIT_PAT);
@@ -161,16 +169,52 @@ test('an invocation spawns git and goose with argument arrays and returns the di
 
   const clone = calls.find((call) => call.command === 'git' && call.args[0] === 'clone');
   expect(clone?.args).toEqual(['clone', '--depth', '1', HELLO, paths.workspace]);
+  expect(clone?.env).toBeUndefined();
   expect(calls.find((call) => call.command === 'git' && call.args[0] === 'diff')?.args).toEqual([
     'diff',
     '--cached',
     CLONE_SHA,
   ]);
+  expect(calls.find((call) => call.command === 'git' && call.args[0] === 'ls-remote')?.args).toEqual([
+    'ls-remote',
+    '--heads',
+    'origin',
+    'refs/heads/goose/draft-1',
+  ]);
+  expect(calls.find((call) => call.command === 'git' && call.args[0] === 'checkout')?.args).toEqual([
+    'checkout',
+    '-b',
+    'goose/draft-1',
+  ]);
+  expect(calls.find((call) => call.command === 'git' && call.args[0] === 'reset')?.args).toEqual([
+    'reset',
+    '--soft',
+    CLONE_SHA,
+  ]);
+  const commit = calls.find((call) => call.command === 'git' && call.args.includes('commit'));
+  expect(commit?.args).toEqual([
+    '-c',
+    `user.name=${GOOSE_GIT_NAME}`,
+    '-c',
+    `user.email=${GOOSE_GIT_EMAIL}`,
+    'commit',
+    '-m',
+    'Apply draft draft-1',
+  ]);
+  const push = calls.find((call) => call.command === 'git' && call.args[0] === 'push');
+  expect(push?.args).toEqual(['push', 'origin', 'HEAD:refs/heads/goose/draft-1']);
+  expect(push?.args).not.toContain('--force');
+  expect(push?.args).not.toContain('-f');
+  expect(push?.env).toEqual({
+    GIT_ASKPASS: GOOSE_ASKPASS_PATH,
+    GIT_TERMINAL_PROMPT: '0',
+    GOOSE_GIT_PAT: TEST_GIT_PAT,
+  });
   const goose = calls.find((call) => call.command === 'goose');
   expect(goose?.args).toEqual(gooseArguments().slice(1));
   expect(goose?.cwd).toBe(paths.workspace);
   expect(calls.some((call) => call.args.some((arg) => /gateway/i.test(arg)))).toBe(false);
-  expect(JSON.stringify(calls)).not.toContain(TEST_GIT_PAT);
+  expect(JSON.stringify(calls.map(({ env: _env, ...call }) => call))).not.toContain(TEST_GIT_PAT);
   expect(reads).toEqual([{ project: 'acme', name: 'git-pat' }]);
   expect(logs).toContain(
     JSON.stringify({
@@ -296,7 +340,7 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'success',
-      response: { diff: 'diff --git a/README.md\n' },
+      response: { diff: 'diff --git a/README.md\n', branch: 'goose/draft-1' },
     });
   } finally {
     await close(server);
@@ -390,6 +434,7 @@ test('a multi-repo order with a selector clones that repo', async () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.body.status).toBe('success');
+    expect(response.body.response?.branch).toBe('goose/draft-1');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -405,7 +450,9 @@ test('a multi-repo order with a selector clones that repo', async () => {
 
 test('an empty diff after Goose exits 0 is an error', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
   const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
     if (command === 'git' && args[0] === 'rev-parse') {
       return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
     }
@@ -423,6 +470,70 @@ test('an empty diff after Goose exits 0 is an error', async () => {
       status: 'error',
       response: { diff: '', error: 'Goose made no changes' },
     });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+  expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+});
+
+test('an existing goose branch is an error and does not push', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'ls-remote') {
+      return { code: 0, stdout: 'abc1234\trefs/heads/goose/draft-1\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { error: 'branch goose/draft-1 already exists', diff: 'diff --git a/README.md\n' },
+    });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+  expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+});
+
+test('a push failure is an error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'push') {
+      return { code: 1, stdout: '', stderr: 'permission denied' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body.status).toBe('error');
+    expect(response.body.response?.error).toContain('git push');
+    expect(response.body.response?.error).toContain('permission denied');
+    expect(response.body.response?.branch).toBeUndefined();
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -450,7 +561,7 @@ test('a Goose commit is still a change because the diff is against the clone tip
     expect(response.statusCode).toBe(200);
     expect(response.body).toMatchObject({
       status: 'success',
-      response: { diff: 'diff --git a/README.md\n' },
+      response: { diff: 'diff --git a/README.md\n', branch: 'goose/draft-1' },
     });
   } finally {
     await close(server);
@@ -674,7 +785,7 @@ function postJson(
   body: unknown,
 ): Promise<{
   statusCode: number;
-  body: { status?: string; response?: { diff?: string; stdout?: string; error?: string } };
+  body: { status?: string; response?: { diff?: string; stdout?: string; error?: string; branch?: string } };
 }> {
   const payload = JSON.stringify(body);
   return new Promise((resolve, reject) => {
@@ -694,7 +805,7 @@ function postJson(
             statusCode: res.statusCode ?? 0,
             body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
               status?: string;
-              response?: { diff?: string; stdout?: string; error?: string };
+              response?: { diff?: string; stdout?: string; error?: string; branch?: string };
             },
           });
         });
