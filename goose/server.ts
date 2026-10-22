@@ -91,17 +91,32 @@ export type TargetRepo = { owner: string; repo: string };
 export type GooseInvokeResult = {
   status: 'success' | 'error';
   response: { diff?: string; stdout?: string; error?: string; branch?: string };
+  gooseExit?: number;
+  reason?: string;
+  startedAtMs?: number;
 };
 
 function failed(
   error: string,
   extra?: { diff?: string; stdout?: string; branch?: string },
+  gooseExit?: number,
+  reason?: string,
 ): GooseInvokeResult {
-  return { status: 'error', response: { ...extra, error } };
+  return { status: 'error', response: { ...extra, error }, gooseExit, reason };
 }
 
-function succeeded(diff: string, stdout: string, branch: string): GooseInvokeResult {
-  return { status: 'success', response: { diff, stdout, branch } };
+function succeeded(
+  diff: string,
+  stdout: string,
+  branch: string,
+  gooseExit?: number,
+  reason?: string,
+): GooseInvokeResult {
+  return { status: 'success', response: { diff, stdout, branch }, gooseExit, reason };
+}
+
+function invokeBody(result: GooseInvokeResult): { status: GooseInvokeResult['status']; response: GooseInvokeResult['response'] } {
+  return { status: result.status, response: result.response };
 }
 
 export function gooseBranch(draftId: string): string {
@@ -404,9 +419,12 @@ async function handleInvocation(
         repo: `${loaded.target.owner}/${loaded.target.repo}`,
         ...(result.response.branch === undefined ? {} : { branch: result.response.branch }),
         status: result.status,
+        ...(result.gooseExit === undefined ? {} : { gooseExit: result.gooseExit }),
+        durationMs: Date.now() - (result.startedAtMs ?? Date.now()),
+        ...(result.reason === undefined ? {} : { reason: result.reason }),
       }),
     );
-    json(res, 200, result);
+    json(res, 200, invokeBody(result));
   } finally {
     setBusy(false);
     await rm(paths.taskPath, { force: true }).catch(() => undefined);
@@ -491,15 +509,16 @@ async function applyWorkOrder(
   putRun: SdlcRunWriter,
   apply: { token: string; project: string; draftId: string },
 ): Promise<GooseInvokeResult> {
+  const startTime = Date.now();
   await rm(paths.workspace, { recursive: true, force: true });
   const clone = await run('git', ['clone', '--depth', '1', repoUrl, paths.workspace]);
   if (clone.code !== 0) {
-    return failed(commandFailure('git clone', clone), { diff: '', stdout: truncate(clone.stdout) });
+    return { ...failed(commandFailure('git clone', clone), { diff: '', stdout: truncate(clone.stdout) }), startedAtMs: startTime };
   }
   const rev = await run('git', ['rev-parse', 'HEAD'], paths.workspace);
   const base = rev.stdout.trim();
   if (rev.code !== 0 || base.length === 0) {
-    return failed(commandFailure('git rev-parse', rev), { diff: '', stdout: truncate(rev.stdout) });
+    return { ...failed(commandFailure('git rev-parse', rev), { diff: '', stdout: truncate(rev.stdout) }), startedAtMs: startTime };
   }
   await writeFile(paths.taskPath, task, { mode: 0o600 });
   await chmod(paths.taskPath, 0o600);
@@ -522,8 +541,8 @@ async function applyWorkOrder(
     add.code === 0
       ? await run('git', ['diff', '--cached', base], paths.workspace)
       : { code: add.code, stdout: '', stderr: add.stderr };
-  const finish = (result: GooseInvokeResult): Promise<GooseInvokeResult> =>
-    recordRun(result, putRun, usage, {
+  const finish = async (result: GooseInvokeResult): Promise<GooseInvokeResult> => {
+    const recorded = await recordRun(result, putRun, usage, {
       project: apply.project,
       draftId: apply.draftId,
       repoUrl,
@@ -531,36 +550,51 @@ async function applyWorkOrder(
       finishedAt,
       stdout,
     });
+    return {
+      ...recorded,
+      startedAtMs: startTime,
+      gooseExit: result.gooseExit,
+      reason: result.reason,
+    };
+  };
   if (goose.code !== 0) {
-    return finish(failed(commandFailure('goose', goose), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('goose', goose), { diff: diff.stdout, stdout }, goose.code, 'goose exited'));
   }
   if (add.code !== 0) {
-    return finish(failed(commandFailure('git add', add), { diff: '', stdout }));
+    return finish(failed(commandFailure('git add', add), { diff: '', stdout }, goose.code));
   }
   if (diff.code !== 0) {
-    return finish(failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout }, goose.code));
   }
   if (diff.stdout.trim().length === 0) {
-    return finish(failed('Goose made no changes', { diff: '', stdout }));
+    return finish(failed('Goose made no changes', { diff: '', stdout }, goose.code));
   }
   if (pricedGooseUsage(usage) === undefined) {
-    return failed('goose output has no token counts', { diff: diff.stdout, stdout });
+    return { ...failed('goose output has no token counts', { diff: diff.stdout, stdout }, goose.code), startedAtMs: startTime };
   }
+
+  const checkoutTests = await runCheckoutTests(run, paths.workspace);
+  if (checkoutTests.ok === false) {
+    return finish(
+      failed(checkoutTests.error, { diff: diff.stdout, stdout: checkoutTests.stdout }, goose.code, 'checkout tests failed'),
+    );
+  }
+
   const branch = gooseBranch(apply.draftId);
   const remote = await run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], paths.workspace);
   if (remote.code !== 0) {
-    return finish(failed(commandFailure('git ls-remote', remote), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git ls-remote', remote), { diff: diff.stdout, stdout }, goose.code));
   }
   if (remote.stdout.trim().length > 0) {
-    return finish(failed(`branch ${branch} already exists`, { diff: diff.stdout, stdout }));
+    return finish(failed(`branch ${branch} already exists`, { diff: diff.stdout, stdout }, goose.code));
   }
   const checkout = await run('git', ['checkout', '-b', branch], paths.workspace);
   if (checkout.code !== 0) {
-    return finish(failed(commandFailure('git checkout', checkout), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git checkout', checkout), { diff: diff.stdout, stdout }, goose.code));
   }
   const reset = await run('git', ['reset', '--soft', base], paths.workspace);
   if (reset.code !== 0) {
-    return finish(failed(commandFailure('git reset', reset), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git reset', reset), { diff: diff.stdout, stdout }, goose.code));
   }
   const commit = await run(
     'git',
@@ -576,7 +610,7 @@ async function applyWorkOrder(
     paths.workspace,
   );
   if (commit.code !== 0) {
-    return finish(failed(commandFailure('git commit', commit), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git commit', commit), { diff: diff.stdout, stdout }, goose.code));
   }
   await writeFile(GOOSE_ASKPASS_PATH, ASKPASS_SCRIPT, { mode: 0o700 });
   await chmod(GOOSE_ASKPASS_PATH, 0o700);
@@ -587,21 +621,42 @@ async function applyWorkOrder(
   };
   const push = await run('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], paths.workspace, gitAuth);
   if (push.code !== 0) {
-    return finish(failed(commandFailure('git push', push), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('git push', push), { diff: diff.stdout, stdout }, goose.code));
   }
-  const recorded = await finish(succeeded(diff.stdout, stdout, branch));
+  const recorded = await finish(succeeded(diff.stdout, stdout, branch, goose.code, 'checkout tests passed'));
   if (recorded.status === 'success') {
     return recorded;
   }
   const removed = await run('git', ['push', 'origin', '--delete', branch], paths.workspace, gitAuth);
   if (removed.code !== 0) {
-    return failed(recorded.response.error ?? commandFailure('git push', removed), {
-      diff: diff.stdout,
-      stdout,
-      branch,
-    });
+    return {
+      ...failed(recorded.response.error ?? commandFailure('git push', removed), {
+        diff: diff.stdout,
+        stdout,
+        branch,
+      }, goose.code, recorded.reason),
+      startedAtMs: startTime,
+    };
   }
   return recorded;
+}
+
+async function runCheckoutTests(
+  run: CommandRunner,
+  workspace: string,
+): Promise<{ ok: true } | { ok: false; error: string; stdout: string }> {
+  const nodeModules = await run('test', ['-d', 'node_modules'], workspace);
+  if (nodeModules.code !== 0) {
+    const npmCi = await run('npm', ['ci'], workspace);
+    if (npmCi.code !== 0) {
+      return { ok: false, error: commandFailure('npm ci', npmCi), stdout: truncate(npmCi.stdout) };
+    }
+  }
+  const npmTest = await run('npm', ['test'], workspace);
+  if (npmTest.code !== 0) {
+    return { ok: false, error: commandFailure('npm test', npmTest), stdout: truncate(npmTest.stdout) };
+  }
+  return { ok: true };
 }
 
 function pricedGooseUsage(usage: GooseUsage | undefined): { estimatedUsd: number } | undefined {

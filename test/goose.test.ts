@@ -261,6 +261,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   const goose = calls.find((call) => call.command === 'goose');
   expect(goose?.args).toEqual(gooseArguments().slice(1));
   expect(goose?.cwd).toBe(paths.workspace);
+  expect(calls.some((call) => call.command === 'npm' && call.args[0] === 'test')).toBe(true);
   expect(calls.some((call) => call.args.some((arg) => /gateway/i.test(arg)))).toBe(false);
   expect(JSON.stringify(calls.map(({ env: _env, ...call }) => call))).not.toContain(TEST_GIT_PAT);
   expect(reads).toEqual([{ project: 'acme', name: 'git-pat' }]);
@@ -272,6 +273,21 @@ test('an invocation spawns git and goose with argument arrays and returns the di
       status: 'loaded',
     }),
   );
+  const applyLog = parseApplyLog(logs);
+  expect(applyLog).toMatchObject({
+    project: 'acme',
+    draftId: 'draft-1',
+    repo: 'octocat/Hello-World',
+    branch: 'goose/draft-1',
+    status: 'success',
+    gooseExit: 0,
+    reason: 'checkout tests passed',
+  });
+  expect(typeof applyLog.durationMs).toBe('number');
+  expect(applyLog.durationMs).toBeGreaterThanOrEqual(0);
+  expect(JSON.stringify(applyLog)).not.toContain('diff --git');
+  expect(JSON.stringify(applyLog)).not.toContain('Add a Smoke line');
+  expect(JSON.stringify(applyLog)).not.toContain('the work order transcript');
   expect(logs.join('\n')).not.toContain(TEST_GIT_PAT);
   } finally {
     logSpy.mockRestore();
@@ -538,6 +554,7 @@ test('an empty diff after Goose exits 0 is an error', async () => {
   }
   expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
   expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+  expect(calls.some((call) => call.command === 'npm')).toBe(false);
 });
 
 test('an existing goose branch is an error and does not push', async () => {
@@ -838,6 +855,10 @@ test('a goose failure that reports token counts writes an error row and does not
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
   const calls: Array<{ command: string; args: string[] }> = [];
   const rows: SdlcRunRow[] = [];
+  const logs: string[] = [];
+  const logSpy = jest.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+    logs.push(String(line));
+  });
   const run: CommandRunner = async (command, args) => {
     calls.push({ command, args });
     if (command === 'goose') {
@@ -851,25 +872,86 @@ test('a goose failure that reports token counts writes an error row and does not
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
-    rows.push(row);
-  });
-  const port = await listen(server);
   try {
-    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
-    expect(response.body.status).toBe('error');
-    expect(response.body.response?.diff).toBe('diff --git a/README.md\n');
-    expect(response.body.response?.stdout).toBe('stopped');
-    expect(response.body.response?.stdout).not.toContain('"messages"');
-    expect(rows).toEqual([
-      expect.objectContaining({ status: 'error', step: 'goose', draftId: 'draft-1', inputTokens: 1_000_000 }),
-    ]);
-    expect(rows[0]).not.toHaveProperty('branch');
+    const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+      rows.push(row);
+    });
+    const port = await listen(server);
+    try {
+      const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+      expect(response.body.status).toBe('error');
+      expect(response.body.response?.diff).toBe('diff --git a/README.md\n');
+      expect(response.body.response?.stdout).toBe('stopped');
+      expect(response.body.response?.stdout).not.toContain('"messages"');
+      expect(rows).toEqual([
+        expect.objectContaining({ status: 'error', step: 'goose', draftId: 'draft-1', inputTokens: 1_000_000 }),
+      ]);
+      expect(rows[0]).not.toHaveProperty('branch');
+    } finally {
+      await close(server);
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+    expect(calls.some((call) => call.command === 'npm')).toBe(false);
+    expect(parseApplyLog(logs)).toMatchObject({ gooseExit: 1, reason: 'goose exited', status: 'error' });
   } finally {
-    await close(server);
-    await rm(root, { recursive: true, force: true });
+    logSpy.mockRestore();
   }
-  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+});
+
+test('a failing npm test returns the diff and does not commit or push', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const logs: string[] = [];
+  const logSpy = jest.spyOn(console, 'log').mockImplementation((line?: unknown) => {
+    logs.push(String(line));
+  });
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'npm' && args[0] === 'test') {
+      return { code: 1, stdout: 'FAIL test/foo.test.ts', stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
+  };
+  try {
+    const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, ignoreRuns);
+    const port = await listen(server);
+    try {
+      const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        status: 'error',
+        response: { diff: 'diff --git a/README.md\n', stdout: 'FAIL test/foo.test.ts' },
+      });
+      expect(response.body.response?.error).toContain('npm test');
+      expect(response.body.response).not.toHaveProperty('branch');
+    } finally {
+      await close(server);
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+    expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+    const applyLog = parseApplyLog(logs);
+    expect(applyLog).toMatchObject({
+      project: 'acme',
+      draftId: 'draft-1',
+      repo: 'octocat/Hello-World',
+      status: 'error',
+      gooseExit: 0,
+      reason: 'checkout tests failed',
+    });
+    expect(typeof applyLog.durationMs).toBe('number');
+    expect(JSON.stringify(applyLog)).not.toContain('diff --git');
+    expect(JSON.stringify(applyLog)).not.toContain('Add a Smoke line');
+  } finally {
+    logSpy.mockRestore();
+  }
 });
 
 test('a missing git-pat writes no row', async () => {
@@ -942,6 +1024,20 @@ test('the minivela stack includes the goose runtime', () => {
   expect(policy).not.toContain('s3:');
   expect(JSON.stringify(template.toJSON())).not.toContain('goose_smoke');
 });
+
+function parseApplyLog(logs: string[]): Record<string, unknown> {
+  for (const line of logs) {
+    try {
+      const row = JSON.parse(line) as Record<string, unknown>;
+      if (typeof row.repo === 'string') {
+        return row;
+      }
+    } catch {
+      continue;
+    }
+  }
+  throw new Error('expected an apply log line');
+}
 
 function twoRepoDraft(): DraftWrite {
   const draft = sampleDraft();
