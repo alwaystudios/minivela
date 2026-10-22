@@ -93,7 +93,10 @@ export type GooseInvokeResult = {
   response: { diff?: string; stdout?: string; error?: string; branch?: string };
 };
 
-function failed(error: string, extra?: { diff?: string; stdout?: string }): GooseInvokeResult {
+function failed(
+  error: string,
+  extra?: { diff?: string; stdout?: string; branch?: string },
+): GooseInvokeResult {
   return { status: 'error', response: { ...extra, error } };
 }
 
@@ -540,6 +543,9 @@ async function applyWorkOrder(
   if (diff.stdout.trim().length === 0) {
     return finish(failed('Goose made no changes', { diff: '', stdout }));
   }
+  if (pricedGooseUsage(usage) === undefined) {
+    return failed('goose output has no token counts', { diff: diff.stdout, stdout });
+  }
   const branch = gooseBranch(apply.draftId);
   const remote = await run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], paths.workspace);
   if (remote.code !== 0) {
@@ -574,15 +580,40 @@ async function applyWorkOrder(
   }
   await writeFile(GOOSE_ASKPASS_PATH, ASKPASS_SCRIPT, { mode: 0o700 });
   await chmod(GOOSE_ASKPASS_PATH, 0o700);
-  const push = await run('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], paths.workspace, {
+  const gitAuth = {
     GIT_ASKPASS: GOOSE_ASKPASS_PATH,
     GIT_TERMINAL_PROMPT: '0',
     GOOSE_GIT_PAT: apply.token,
-  });
+  };
+  const push = await run('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], paths.workspace, gitAuth);
   if (push.code !== 0) {
     return finish(failed(commandFailure('git push', push), { diff: diff.stdout, stdout }));
   }
-  return finish(succeeded(diff.stdout, stdout, branch));
+  const recorded = await finish(succeeded(diff.stdout, stdout, branch));
+  if (recorded.status === 'success') {
+    return recorded;
+  }
+  const removed = await run('git', ['push', 'origin', '--delete', branch], paths.workspace, gitAuth);
+  if (removed.code !== 0) {
+    return failed(recorded.response.error ?? commandFailure('git push', removed), {
+      diff: diff.stdout,
+      stdout,
+      branch,
+    });
+  }
+  return recorded;
+}
+
+function pricedGooseUsage(usage: GooseUsage | undefined): { estimatedUsd: number } | undefined {
+  if (usage === undefined) {
+    return undefined;
+  }
+  const priced = estimateSdlcRun({
+    modelId: GOOSE_MODEL_ID,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  });
+  return 'estimatedUsd' in priced ? priced : undefined;
 }
 
 async function recordRun(
@@ -598,18 +629,8 @@ async function recordRun(
     stdout: string;
   },
 ): Promise<GooseInvokeResult> {
-  if (usage === undefined) {
-    if (result.status === 'success') {
-      return failed('goose output has no token counts', { diff: result.response.diff ?? '', stdout: run.stdout });
-    }
-    return result;
-  }
-  const priced = estimateSdlcRun({
-    modelId: GOOSE_MODEL_ID,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-  });
-  if (!('estimatedUsd' in priced)) {
+  const priced = pricedGooseUsage(usage);
+  if (priced === undefined || usage === undefined) {
     if (result.status === 'success') {
       return failed('goose output has no token counts', { diff: result.response.diff ?? '', stdout: run.stdout });
     }

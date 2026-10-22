@@ -719,7 +719,7 @@ test('while goose is running, ping is HealthyBusy', async () => {
   }
 });
 
-test('a goose result with no token counts is an error and writes no row', async () => {
+test('a goose result with no token counts is an error, writes no row, and does not push', async () => {
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
   const calls: Array<{ command: string; args: string[] }> = [];
   const rows: SdlcRunRow[] = [];
@@ -748,12 +748,90 @@ test('a goose result with no token counts is an error and writes no row', async 
       response: { diff: 'diff --git a/README.md\n', error: 'goose output has no token counts' },
     });
     expect(response.body.response?.stdout).not.toContain('the work order transcript');
+    expect(response.body.response?.branch).toBeUndefined();
     expect(rows).toEqual([]);
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
   }
-  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(true);
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+  expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+});
+
+test('a failed run-row write removes the branch it just pushed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson('edited'), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async () => {
+    throw new Error('the table rejected the row');
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { diff: 'diff --git a/README.md\n', error: 'the table rejected the row' },
+    });
+    expect(response.body.response?.branch).toBeUndefined();
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.filter((call) => call.command === 'git' && call.args[0] === 'push').map((call) => call.args)).toEqual([
+    ['push', 'origin', 'HEAD:refs/heads/goose/draft-1'],
+    ['push', 'origin', '--delete', 'goose/draft-1'],
+  ]);
+});
+
+test('a failed run-row write keeps the branch when the delete fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'push' && args.includes('--delete')) {
+      return { code: 1, stdout: '', stderr: 'delete denied' };
+    }
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson('edited'), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async () => {
+    throw new Error('the table rejected the row');
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: {
+        diff: 'diff --git a/README.md\n',
+        error: 'the table rejected the row',
+        branch: 'goose/draft-1',
+      },
+    });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('a goose failure that reports token counts writes an error row and does not push', async () => {
