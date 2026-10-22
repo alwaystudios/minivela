@@ -1,4 +1,11 @@
-import { BREAKDOWN_SYSTEM_PROMPT, breakdownSearchQuery, draftBreakdown } from '../lib/agent/draft-breakdown.js';
+import {
+  BREAKDOWN_SYSTEM_PROMPT,
+  breakdownCompletionFromModel,
+  breakdownSearchQuery,
+  draftBreakdown,
+  fetchStoredBreakdown,
+  type DraftBreakdownRun,
+} from '../lib/agent/draft-breakdown.js';
 import type { Repo } from '../lib/lookup.js';
 
 const createdAt = '2026-10-20T18:00:00.000Z';
@@ -14,15 +21,32 @@ const repo: Repo = {
   summary: 'Bills meters. Module src/tariff.ts.',
 };
 
+const sonnetUsage = {
+  model: 'us.anthropic.claude-sonnet-4-6',
+  startedAt: '2026-10-20T18:00:00.000Z',
+  finishedAt: '2026-10-20T18:00:01.000Z',
+};
+
+function counted(text: string, cutOff = false, usage: { input_tokens?: number; output_tokens?: number } = { input_tokens: 10, output_tokens: 20 }) {
+  return breakdownCompletionFromModel({
+    text,
+    cutOff,
+    ...sonnetUsage,
+    usage,
+  });
+}
+
 function draft(input: Partial<Parameters<typeof draftBreakdown>[0]> = {}) {
   const put = jest.fn<Promise<void>, [unknown]>().mockResolvedValue(undefined);
-  const complete = jest.fn().mockResolvedValue({
-    text: JSON.stringify({
-      epic: '# Bill the new meter',
-      stories: ['# Show the tariff', '# Record the reading'],
-    }),
-    cutOff: false,
-  });
+  const putRun = jest.fn<Promise<void>, [DraftBreakdownRun]>().mockResolvedValue(undefined);
+  const complete = jest.fn().mockResolvedValue(
+    counted(
+      JSON.stringify({
+        epic: '# Bill the new meter',
+        stories: ['# Show the tariff', '# Record the reading'],
+      }),
+    ),
+  );
   const ready = draftBreakdown({
     project: 'acme',
     page,
@@ -33,11 +57,12 @@ function draft(input: Partial<Parameters<typeof draftBreakdown>[0]> = {}) {
     loadTemplate: async () => undefined,
     complete,
     put,
+    putRun,
     breakdownId: 'bd-1',
     createdAt,
     ...input,
   });
-  return { ready, put, complete };
+  return { ready, put, putRun: input.putRun ?? putRun, complete: input.complete ?? complete };
 }
 
 test('the prompt keeps repo names on the map and follows ordinary Jira practice', () => {
@@ -226,7 +251,7 @@ test('the page chunk is not sent to the model', async () => {
 
 test('a page the model cannot split is stored as a refusal', async () => {
   const { ready, put } = draft({
-    complete: async () => ({ text: JSON.stringify({ reasons: 'The page is a status report.' }), cutOff: false }),
+    complete: async () => counted(JSON.stringify({ reasons: 'The page is a status report.' })),
   });
   await expect(ready).resolves.toEqual({
     response: 'The page is a status report.\n',
@@ -240,10 +265,7 @@ test('a page the model cannot split is stored as a refusal', async () => {
 
 test('a cut-off reply writes no rows', async () => {
   const { ready, put } = draft({
-    complete: async () => ({
-      text: JSON.stringify({ epic: '# Bill the new meter', stories: ['# Show the tariff'] }),
-      cutOff: true,
-    }),
+    complete: async () => counted(JSON.stringify({ epic: '# Bill the new meter', stories: ['# Show the tariff'] }), true),
   });
   await expect(ready).resolves.toEqual({ response: 'The model reply was cut off.', status: 'error' });
   expect(put).not.toHaveBeenCalled();
@@ -253,7 +275,7 @@ test('a literal copy of the split example is stored', async () => {
   const example = '{"epic":"# Epic","stories":["# Story"]}';
   expect(BREAKDOWN_SYSTEM_PROMPT).toContain(`return ${example}`);
   const { ready, put } = draft({
-    complete: async () => ({ text: example, cutOff: false }),
+    complete: async () => counted(example),
   });
   await expect(ready).resolves.toMatchObject({ status: 'success', breakdownId: 'bd-1' });
   expect(put).toHaveBeenCalledWith([
@@ -265,7 +287,7 @@ test('a literal copy of the split example is stored', async () => {
 test('a reply that does not parse writes no rows and logs the model text', async () => {
   const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
   const { ready, put } = draft({
-    complete: async () => ({ text: 'not json', cutOff: false }),
+    complete: async () => counted('not json'),
   });
   await expect(ready).resolves.toEqual({ response: 'The model reply could not be parsed.', status: 'error' });
   expect(put).not.toHaveBeenCalled();
@@ -285,7 +307,7 @@ test('quotation marks inside a ticket are stored', async () => {
     '```',
   ].join('\n');
   const { ready, put } = draft({
-    complete: async () => ({ text, cutOff: false }),
+    complete: async () => counted(text),
   });
   await expect(ready).resolves.toMatchObject({ status: 'success' });
   expect(put).toHaveBeenCalledWith([
@@ -300,14 +322,158 @@ test('quotation marks inside a ticket are stored', async () => {
 test('a stored story keeps the markdown the model returned', async () => {
   const story = '# Record the reading  \n';
   const { ready, put } = draft({
-    complete: async () => ({
-      text: '```json\n{"epic":"# Bill the new meter","stories":["' + story.replace(/\n/g, '\\n') + '"]}\n```',
-      cutOff: false,
-    }),
+    complete: async () =>
+      counted('```json\n{"epic":"# Bill the new meter","stories":["' + story.replace(/\n/g, '\\n') + '"]}\n```'),
   });
   await ready;
   expect(put).toHaveBeenCalledWith([
     expect.objectContaining({ kind: 'epic', body: '# Bill the new meter' }),
     expect.objectContaining({ kind: 'story', body: story }),
+  ]);
+});
+
+test('a draft-breakdown whose model response has both counts writes one row', async () => {
+  const rows: DraftBreakdownRun[] = [];
+  const { ready } = draft({
+    putRun: async (row) => {
+      rows.push(row);
+    },
+    complete: async () =>
+      counted(
+        JSON.stringify({
+          epic: '# Bill the new meter',
+          stories: ['# Show the tariff'],
+        }),
+        false,
+        { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      ),
+  });
+  const result = await ready;
+  expect(result).toMatchObject({ status: 'success', breakdownId: 'bd-1' });
+  expect(rows).toEqual([
+    {
+      project: 'acme',
+      runId: expect.any(String),
+      step: 'draft-breakdown',
+      model: 'us.anthropic.claude-sonnet-4-6',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      estimatedUsd: 18,
+      startedAt: sonnetUsage.startedAt,
+      finishedAt: sonnetUsage.finishedAt,
+      status: 'success',
+      breakdownId: 'bd-1',
+    },
+  ]);
+  expect(rows[0]).not.toHaveProperty('page');
+  expect(rows[0]).not.toHaveProperty('draftId');
+  expect(rows[0]).not.toHaveProperty('branch');
+  expect(rows[0]).not.toHaveProperty('grade');
+  expect(rows[0]).not.toHaveProperty('repoUrl');
+  expect(rows[0]).not.toHaveProperty('prompt');
+  expect(rows[0]).not.toHaveProperty('stdout');
+  expect(rows[0]).not.toHaveProperty('diff');
+  expect(JSON.stringify(rows[0])).not.toContain(pageText);
+});
+
+test('an empty repo map writes no row', async () => {
+  const putRun = jest.fn();
+  const { ready, complete } = draft({ loadRepos: async () => [], putRun });
+  await expect(ready).resolves.toMatchObject({ status: 'refused' });
+  expect(complete).not.toHaveBeenCalled();
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('a fetch by breakdownId writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await fetchStoredBreakdown({
+    project: 'acme',
+    breakdownId: 'bd-1',
+    query: async () => [
+      {
+        project: 'acme',
+        ticketId: 'bd-1#0',
+        breakdownId: 'bd-1',
+        kind: 'epic',
+        ordinal: 0,
+        body: '# Bill the new meter',
+        createdAt,
+        page,
+      },
+    ],
+    putRun,
+  });
+  expect(result).toMatchObject({ status: 'success', breakdownId: 'bd-1' });
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('a model response with no output_tokens is an error and writes no row', async () => {
+  const putRun = jest.fn();
+  const { ready, put } = draft({
+    putRun,
+    complete: async () =>
+      counted(JSON.stringify({ epic: '# Bill the new meter', stories: ['# Show the tariff'] }), false, {
+        input_tokens: 12,
+      }),
+  });
+  await expect(ready).resolves.toEqual({
+    response: 'The breakdown model returned no token counts.',
+    status: 'error',
+  });
+  expect(put).not.toHaveBeenCalled();
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('an unknown model id is an error and writes no row', async () => {
+  const putRun = jest.fn();
+  const { ready, put } = draft({
+    putRun,
+    complete: async () =>
+      breakdownCompletionFromModel({
+        text: JSON.stringify({ epic: '# Bill the new meter', stories: ['# Show the tariff'] }),
+        cutOff: false,
+        model: 'other',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        startedAt: sonnetUsage.startedAt,
+        finishedAt: sonnetUsage.finishedAt,
+      }),
+  });
+  await expect(ready).resolves.toEqual({ response: 'An unknown model id.', status: 'error' });
+  expect(put).not.toHaveBeenCalled();
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('a cut-off reply with both counts writes one run row and no breakdown rows', async () => {
+  const rows: DraftBreakdownRun[] = [];
+  const { ready, put } = draft({
+    putRun: async (row) => {
+      rows.push(row);
+    },
+    complete: async () => counted(JSON.stringify({ epic: '# Bill the new meter', stories: ['# Show the tariff'] }), true),
+  });
+  await expect(ready).resolves.toEqual({ response: 'The model reply was cut off.', status: 'error' });
+  expect(put).not.toHaveBeenCalled();
+  expect(rows).toEqual([
+    expect.objectContaining({
+      step: 'draft-breakdown',
+      status: 'error',
+      breakdownId: 'bd-1',
+      inputTokens: 10,
+      outputTokens: 20,
+    }),
+  ]);
+});
+
+test('a model refusal writes one run row with status refused', async () => {
+  const rows: DraftBreakdownRun[] = [];
+  const { ready } = draft({
+    putRun: async (row) => {
+      rows.push(row);
+    },
+    complete: async () => counted(JSON.stringify({ reasons: 'The page is a status report.' })),
+  });
+  await expect(ready).resolves.toMatchObject({ status: 'refused', breakdownId: 'bd-1' });
+  expect(rows).toEqual([
+    expect.objectContaining({ status: 'refused', step: 'draft-breakdown', breakdownId: 'bd-1' }),
   ]);
 });

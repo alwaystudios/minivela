@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import type { RetrievedDecision } from '../search-decisions.js';
 import type { Repo } from '../lookup.js';
-import { breakdownTicketId, renderBreakdown, type BreakdownRow } from '../breakdown.js';
-import type { AnswerResult, RetrievedChunk } from './answer.js';
+import { estimateSdlcRun } from '../sdlc-run.js';
+import { breakdownTicketId, readBreakdown, renderBreakdown, type BreakdownRow } from '../breakdown.js';
+import type { AnswerResult, AnswerStatus, RetrievedChunk } from './answer.js';
 
 export const TICKET_TEMPLATE_ID = 'ticket';
 
@@ -9,6 +11,71 @@ const CUT_OFF = 'The model reply was cut off.';
 const UNPARSED = 'The model reply could not be parsed.';
 const DECISION_SEARCH_FAILED = 'Decision search failed.';
 const DOCUMENT_SEARCH_FAILED = 'Document search failed.';
+const NO_TOKEN_COUNTS = 'The breakdown model returned no token counts.';
+
+export type BreakdownModelCompletion = {
+  text: string;
+  cutOff: boolean;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type DraftBreakdownRun = {
+  project: string;
+  runId: string;
+  step: 'draft-breakdown';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  startedAt: string;
+  finishedAt: string;
+  status: AnswerStatus;
+  breakdownId: string;
+};
+
+export class BreakdownModelUsageError extends Error {
+  constructor() {
+    super('breakdown model response is missing token counts');
+    this.name = 'BreakdownModelUsageError';
+  }
+}
+
+export function breakdownCompletionFromModel(input: {
+  text: string;
+  cutOff: boolean;
+  model: string;
+  usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+  startedAt: string;
+  finishedAt: string;
+}): BreakdownModelCompletion {
+  const inputTokens = input.usage?.input_tokens;
+  const outputTokens = input.usage?.output_tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) {
+    throw new BreakdownModelUsageError();
+  }
+  return {
+    text: input.text,
+    cutOff: input.cutOff,
+    model: input.model,
+    inputTokens,
+    outputTokens,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+  };
+}
+
+export async function fetchStoredBreakdown(input: {
+  project: string;
+  breakdownId: string;
+  query: (key: { project: string; breakdownId: string }) => Promise<unknown[]>;
+  putRun: (row: DraftBreakdownRun) => Promise<void>;
+}): Promise<AnswerResult> {
+  return readBreakdown(input);
+}
 
 export async function draftBreakdown(input: {
   project: string;
@@ -26,8 +93,9 @@ export async function draftBreakdown(input: {
     decisions: RetrievedDecision[];
     repos: Repo[];
     template?: string;
-  }) => Promise<{ text: string; cutOff: boolean }>;
+  }) => Promise<BreakdownModelCompletion>;
   put: (rows: BreakdownRow[]) => Promise<void>;
+  putRun: (row: DraftBreakdownRun) => Promise<void>;
   breakdownId: string;
   createdAt: string;
 }): Promise<AnswerResult> {
@@ -64,22 +132,42 @@ export async function draftBreakdown(input: {
     throw templateResult.reason;
   }
   const template = templateResult.value;
-  const reply = await input.complete({
-    project: input.project,
-    page: input.page,
-    pageText: raw,
-    chunks: chunksResult.value.filter((chunk) => !chunkIsPage(chunk.uri, input.page)),
-    decisions: decisionsResult.value,
-    repos: reposResult.value,
-    ...(template ? { template } : {}),
+  let reply: BreakdownModelCompletion;
+  try {
+    reply = await input.complete({
+      project: input.project,
+      page: input.page,
+      pageText: raw,
+      chunks: chunksResult.value.filter((chunk) => !chunkIsPage(chunk.uri, input.page)),
+      decisions: decisionsResult.value,
+      repos: reposResult.value,
+      ...(template ? { template } : {}),
+    });
+  } catch (error) {
+    if (error instanceof BreakdownModelUsageError) {
+      return { response: NO_TOKEN_COUNTS, status: 'error' };
+    }
+    throw error;
+  }
+  const priced = estimateSdlcRun({
+    modelId: reply.model,
+    inputTokens: reply.inputTokens,
+    outputTokens: reply.outputTokens,
   });
+  if (!('estimatedUsd' in priced)) {
+    return { response: 'An unknown model id.', status: 'error' };
+  }
+  const finish = async (result: AnswerResult): Promise<AnswerResult> => {
+    await recordBreakdownRun(input, reply, result.status, priced.estimatedUsd);
+    return result;
+  };
   if (reply.cutOff) {
-    return { response: CUT_OFF, status: 'error' };
+    return finish({ response: CUT_OFF, status: 'error' });
   }
   const parsed = parseBreakdownReply(reply.text);
   if (parsed.kind === 'unparsed') {
     console.error(reply.text);
-    return { response: UNPARSED, status: 'error' };
+    return finish({ response: UNPARSED, status: 'error' });
   }
   const rows =
     parsed.kind === 'refusal'
@@ -90,11 +178,40 @@ export async function draftBreakdown(input: {
         ];
   await input.put(rows);
   const refused = rows.length === 1 && rows[0].kind === 'refusal';
-  return {
+  return finish({
     response: renderBreakdown(rows),
     status: refused ? 'refused' : 'success',
     breakdownId: input.breakdownId,
-  };
+  });
+}
+
+async function recordBreakdownRun(
+  input: { project: string; breakdownId: string; putRun: (row: DraftBreakdownRun) => Promise<void> },
+  usage: BreakdownModelCompletion,
+  status: AnswerStatus,
+  estimatedUsd: number,
+): Promise<void> {
+  try {
+    await input.putRun({
+      project: input.project,
+      runId: randomUUID(),
+      step: 'draft-breakdown',
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd,
+      startedAt: usage.startedAt,
+      finishedAt: usage.finishedAt,
+      status,
+      breakdownId: input.breakdownId,
+    });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 export const BREAKDOWN_SYSTEM_PROMPT =
