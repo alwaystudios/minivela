@@ -303,6 +303,7 @@ export class MinivelaStack extends cdk.Stack {
         RULES_TABLE_NAME: rules.tableName,
         REPOS_TABLE_NAME: repos.tableName,
         DRAFTS_TABLE_NAME: drafts.tableName,
+        SDLC_RUNS_TABLE_NAME: sdlcRuns.tableName,
         BREAKDOWNS_TABLE_NAME: breakdowns.tableName,
         TEMPLATES_TABLE_NAME: templates.tableName,
         DOCUMENTS_BUCKET_NAME: documents.bucketName,
@@ -361,6 +362,12 @@ export class MinivelaStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ['dynamodb:PutItem'],
         resources: [drafts.tableArn, breakdowns.tableArn],
+      }),
+    );
+    agent.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'],
+        resources: [sdlcRuns.tableArn],
       }),
     );
     new cdk.CfnOutput(this, 'TranscriptBucketName', {

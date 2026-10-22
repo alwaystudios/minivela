@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { RetrievedDecision } from '../search-decisions.js';
 import type { Repo, Rule } from '../lookup.js';
+import { estimateSdlcRun } from '../sdlc-run.js';
 import {
   formatDraftMarkdown,
   parseDraftModelText,
@@ -7,7 +9,70 @@ import {
   type DraftResponseFormat,
   type DraftWrite,
 } from '../work-order.js';
-import type { AnswerResult, RetrievedChunk } from './answer.js';
+import type { AnswerResult, AnswerStatus, RetrievedChunk } from './answer.js';
+
+export type DraftModelCompletion = {
+  text: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type DraftWorkOrderRun = {
+  project: string;
+  runId: string;
+  step: 'draft-work-order';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  startedAt: string;
+  finishedAt: string;
+  status: AnswerStatus;
+  draftId: string;
+};
+
+export class DraftModelUsageError extends Error {
+  constructor() {
+    super('draft model response is missing token counts');
+    this.name = 'DraftModelUsageError';
+  }
+}
+
+export function draftCompletionFromModel(input: {
+  text: string;
+  model: string;
+  usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+  startedAt: string;
+  finishedAt: string;
+}): DraftModelCompletion {
+  const inputTokens = input.usage?.input_tokens;
+  const outputTokens = input.usage?.output_tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) {
+    throw new DraftModelUsageError();
+  }
+  return {
+    text: input.text,
+    model: input.model,
+    inputTokens,
+    outputTokens,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+  };
+}
+
+export async function fetchStoredDraft(input: {
+  project: string;
+  draftId: string;
+  format?: DraftResponseFormat;
+  get: (key: { project: string; draftId: string }) => Promise<unknown>;
+  loadDecisions: (ids: string[]) => Promise<RetrievedDecision[]>;
+  putRun: (row: DraftWorkOrderRun) => Promise<void>;
+}): Promise<AnswerResult> {
+  return readWorkOrder(input);
+}
 
 export async function draftWorkOrder(input: {
   prompt: string;
@@ -24,8 +89,9 @@ export async function draftWorkOrder(input: {
     decisions: RetrievedDecision[];
     rules: Rule[];
     repos: Repo[];
-  }) => Promise<string>;
+  }) => Promise<string | DraftModelCompletion>;
   put: (item: DraftWrite) => Promise<void>;
+  putRun: (row: DraftWorkOrderRun) => Promise<void>;
   draftId: string;
   createdAt: string;
   format?: DraftResponseFormat;
@@ -64,14 +130,28 @@ export async function draftWorkOrder(input: {
   if (repos.length === 0) {
     return { response: 'The repo map is empty.', status: 'refused' };
   }
-  const text = await input.complete({
-    prompt: input.prompt,
-    project: input.project,
-    chunks,
-    decisions,
-    rules,
-    repos,
-  });
+  let completed: string | DraftModelCompletion;
+  try {
+    completed = await input.complete({
+      prompt: input.prompt,
+      project: input.project,
+      chunks,
+      decisions,
+      rules,
+      repos,
+    });
+  } catch (error) {
+    if (error instanceof DraftModelUsageError) {
+      return { response: 'The draft model returned no token counts.', status: 'error' };
+    }
+    throw error;
+  }
+  const text = typeof completed === 'string' ? completed : completed.text;
+  const usage = typeof completed === 'string' ? undefined : completed;
+  const finish = async (result: AnswerResult): Promise<AnswerResult> => {
+    await recordDraftRun(input, usage, result.status);
+    return result;
+  };
   const parsed = parseDraftModelText(text, {
     project: input.project,
     prompt: input.prompt,
@@ -88,7 +168,7 @@ export async function draftWorkOrder(input: {
         draftTail: text.slice(-500),
       }),
     );
-    return { response: parsed.response, status: 'success' };
+    return finish({ response: parsed.response, status: 'success' });
   }
   const item: DraftWrite = {
     project: input.project,
@@ -105,7 +185,46 @@ export async function draftWorkOrder(input: {
           decisions.filter((decision) => parsed.citations.decisionIds.includes(decision.decisionId)),
         )
       : JSON.stringify(item, null, 2);
-  return { response, status: 'success' };
+  return finish({ response, status: 'success' });
+}
+
+async function recordDraftRun(
+  input: { project: string; draftId: string; putRun: (row: DraftWorkOrderRun) => Promise<void> },
+  usage: DraftModelCompletion | undefined,
+  status: AnswerStatus,
+): Promise<void> {
+  if (usage === undefined) {
+    return;
+  }
+  const priced = estimateSdlcRun({
+    modelId: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  });
+  if (!('estimatedUsd' in priced)) {
+    return;
+  }
+  try {
+    await input.putRun({
+      project: input.project,
+      runId: randomUUID(),
+      step: 'draft-work-order',
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd: priced.estimatedUsd,
+      startedAt: usage.startedAt,
+      finishedAt: usage.finishedAt,
+      status,
+      draftId: input.draftId,
+    });
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 export async function readWorkOrder(input: {
