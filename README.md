@@ -4,6 +4,8 @@ Minivela is the open-source, self-hosted baby brother of [Supervela](https://www
 
 The same stack runs [Goose](https://goose-docs.ai/) in a second AgentCore runtime. Pass a stored work-order draft. Goose edits a shallow clone of one repository on that order and the runtime returns the diff.
 
+Goose pushes a draft branch after a non-empty diff.
+
 ## Components
 
 ```mermaid
