@@ -129,7 +129,7 @@ test('goose runs from an argument array with the developer builtin and no gatewa
     '--recipe',
     GOOSE_RECIPE_PATH,
     '--max-turns',
-    '30',
+    '120',
     '--quiet',
     '--with-builtin',
     'developer',
