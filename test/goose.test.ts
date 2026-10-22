@@ -22,6 +22,8 @@ import {
   STDOUT_LIMIT,
   type CommandRunner,
   type GoosePaths,
+  type SdlcRunRow,
+  type SdlcRunWriter,
 } from '../goose/server.js';
 
 jest.setTimeout(180_000);
@@ -30,6 +32,28 @@ const HELLO = 'https://github.com/octocat/Hello-World';
 const CLONE_SHA = 'abc1234';
 const TEST_GIT_PAT = 'test-git-pat';
 const presentGitPat = async () => TEST_GIT_PAT;
+const ignoreRuns: SdlcRunWriter = async () => undefined;
+
+function gooseJson(
+  text: string,
+  counts?: { inputTokens: number; outputTokens: number } | null,
+): string {
+  const metadata =
+    counts === null
+      ? { status: 'completed' }
+      : {
+          input_tokens: counts?.inputTokens ?? 1_000_000,
+          output_tokens: counts?.outputTokens ?? 1_000_000,
+          status: 'completed',
+        };
+  return JSON.stringify({
+    messages: [
+      { role: 'user', content: [{ type: 'text', text: 'the work order transcript' }] },
+      { role: 'assistant', content: [{ type: 'text', text }] },
+    ],
+    metadata,
+  });
+}
 
 test('accepts a stored draft', () => {
   const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
@@ -111,6 +135,8 @@ test('goose runs from an argument array with the developer builtin and no gatewa
     'developer',
     '--no-profile',
     '--no-session',
+    '--output-format',
+    'json',
   ]);
   expect(args.join(' ')).not.toMatch(/gateway/i);
   expect(args).not.toContain('--resume');
@@ -133,7 +159,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
       expect(mode).toBe(0o600);
       expect(await readFile(paths.targetPath, 'utf8')).toBe('octocat/Hello-World\n');
       expect(await readFile(paths.taskPath, 'utf8')).not.toContain(TEST_GIT_PAT);
-      return { code: 0, stdout: 'z'.repeat(STDOUT_LIMIT + 50), stderr: '' };
+      return { code: 0, stdout: gooseJson('z'.repeat(STDOUT_LIMIT + 50)), stderr: '' };
     }
     if (command === 'git' && args[0] === 'rev-parse') {
       return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
@@ -141,11 +167,14 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
+  const rows: SdlcRunRow[] = [];
   const server = createGooseServer(run, paths, async () => sampleDraft(), async (project, name) => {
     reads.push({ project, name });
     return TEST_GIT_PAT;
+  }, async (row) => {
+    rows.push(row);
   });
   const port = await listen(server);
   try {
@@ -162,6 +191,25 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     });
     expect(response.body.response?.stdout).toHaveLength(STDOUT_LIMIT);
     expect(response.body.response?.stdout).not.toContain(TEST_GIT_PAT);
+    expect(response.body.response?.stdout).not.toContain('the work order transcript');
+    expect(response.body.response?.stdout).not.toContain('"messages"');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      project: 'acme',
+      step: 'goose',
+      model: 'deepseek.v3.2',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      estimatedUsd: 2.47,
+      status: 'success',
+      draftId: 'draft-1',
+      repoUrl: HELLO,
+      branch: 'goose/draft-1',
+    });
+    expect(rows[0]).not.toHaveProperty('diff');
+    expect(rows[0]).not.toHaveProperty('prompt');
+    expect(rows[0]).not.toHaveProperty('grade');
+    expect(rows[0]).not.toHaveProperty('breakdownId');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -288,9 +336,9 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, ignoreRuns);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -315,7 +363,7 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
       expect(task).toContain('Draft: draft-1');
       expect(task).toContain('Add a Smoke line to README.md');
       expect(task).toContain('octocat/Hello-World');
-      return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: gooseJson('edited the readme'), stderr: '' };
     }
     if (command === 'git' && args[0] === 'rev-parse') {
       return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
@@ -323,7 +371,7 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
   const server = createGooseServer(
     run,
@@ -333,6 +381,7 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
       return draft;
     },
     presentGitPat,
+    ignoreRuns,
   );
   const port = await listen(server);
   try {
@@ -422,9 +471,9 @@ test('a multi-repo order with a selector clones that repo', async () => {
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, paths, async () => twoRepoDraft(), presentGitPat);
+  const server = createGooseServer(run, paths, async () => twoRepoDraft(), presentGitPat, ignoreRuns);
   const port = await listen(server);
   try {
     const response = await postJson(port, {
@@ -459,9 +508,12 @@ test('an empty diff after Goose exits 0 is an error', async () => {
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: '', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const rows: SdlcRunRow[] = [];
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -470,6 +522,16 @@ test('an empty diff after Goose exits 0 is an error', async () => {
       status: 'error',
       response: { diff: '', error: 'Goose made no changes' },
     });
+    expect(rows).toEqual([
+      expect.objectContaining({
+        project: 'acme',
+        step: 'goose',
+        status: 'error',
+        draftId: 'draft-1',
+        repoUrl: HELLO,
+      }),
+    ]);
+    expect(rows[0]).not.toHaveProperty('branch');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -492,9 +554,12 @@ test('an existing goose branch is an error and does not push', async () => {
     if (command === 'git' && args[0] === 'ls-remote') {
       return { code: 0, stdout: 'abc1234\trefs/heads/goose/draft-1\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const rows: SdlcRunRow[] = [];
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -503,6 +568,8 @@ test('an existing goose branch is an error and does not push', async () => {
       status: 'error',
       response: { error: 'branch goose/draft-1 already exists', diff: 'diff --git a/README.md\n' },
     });
+    expect(rows[0]).toMatchObject({ status: 'error', draftId: 'draft-1' });
+    expect(rows[0]).not.toHaveProperty('branch');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -523,9 +590,12 @@ test('a push failure is an error', async () => {
     if (command === 'git' && args[0] === 'push') {
       return { code: 1, stdout: '', stderr: 'permission denied' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const rows: SdlcRunRow[] = [];
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -534,6 +604,9 @@ test('a push failure is an error', async () => {
     expect(response.body.response?.error).toContain('git push');
     expect(response.body.response?.error).toContain('permission denied');
     expect(response.body.response?.branch).toBeUndefined();
+    expect(response.body.response?.diff).toBe('diff --git a/README.md\n');
+    expect(rows[0]).toMatchObject({ status: 'error', draftId: 'draft-1' });
+    expect(rows[0]).not.toHaveProperty('branch');
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -552,9 +625,9 @@ test('a Goose commit is still a change because the diff is against the clone tip
       }
       return { code: 0, stdout: '', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, ignoreRuns);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -578,9 +651,9 @@ test('a git add failure is an error', async () => {
     if (command === 'git' && args[0] === 'add') {
       return { code: 1, stdout: '', stderr: 'index.lock' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, ignoreRuns);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -620,7 +693,7 @@ test('while goose is running, ping is HealthyBusy', async () => {
       const ping = await getJson(port, '/ping');
       expect(ping.body.status).toBe('HealthyBusy');
       release();
-      return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: gooseJson('edited the readme'), stderr: '' };
     }
     if (command === 'git' && args[0] === 'rev-parse') {
       return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
@@ -628,9 +701,9 @@ test('while goose is running, ping is HealthyBusy', async () => {
     if (command === 'git' && args[0] === 'diff') {
       return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
     }
-    return { code: 0, stdout: '', stderr: '' };
+    return { code: 0, stdout: command === 'goose' ? gooseJson('edited') : '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, ignoreRuns);
   port = await listen(server);
   try {
     const pending = postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -643,6 +716,184 @@ test('while goose is running, ping is HealthyBusy', async () => {
     release();
     await close(server);
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a goose result with no token counts is an error, writes no row, and does not push', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const rows: SdlcRunRow[] = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson('edited', null), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { diff: 'diff --git a/README.md\n', error: 'goose output has no token counts' },
+    });
+    expect(response.body.response?.stdout).not.toContain('the work order transcript');
+    expect(response.body.response?.branch).toBeUndefined();
+    expect(rows).toEqual([]);
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+  expect(calls.some((call) => call.command === 'git' && call.args.includes('commit'))).toBe(false);
+});
+
+test('a failed run-row write removes the branch it just pushed', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson('edited'), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async () => {
+    throw new Error('the table rejected the row');
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { diff: 'diff --git a/README.md\n', error: 'the table rejected the row' },
+    });
+    expect(response.body.response?.branch).toBeUndefined();
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.filter((call) => call.command === 'git' && call.args[0] === 'push').map((call) => call.args)).toEqual([
+    ['push', 'origin', 'HEAD:refs/heads/goose/draft-1'],
+    ['push', 'origin', '--delete', 'goose/draft-1'],
+  ]);
+});
+
+test('a failed run-row write keeps the branch when the delete fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const run: CommandRunner = async (command, args) => {
+    if (command === 'git' && args[0] === 'push' && args.includes('--delete')) {
+      return { code: 1, stdout: '', stderr: 'delete denied' };
+    }
+    if (command === 'goose') {
+      return { code: 0, stdout: gooseJson('edited'), stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async () => {
+    throw new Error('the table rejected the row');
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: {
+        diff: 'diff --git a/README.md\n',
+        error: 'the table rejected the row',
+        branch: 'goose/draft-1',
+      },
+    });
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a goose failure that reports token counts writes an error row and does not push', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goose-'));
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const rows: SdlcRunRow[] = [];
+  const run: CommandRunner = async (command, args) => {
+    calls.push({ command, args });
+    if (command === 'goose') {
+      return { code: 1, stdout: gooseJson('stopped'), stderr: 'Bedrock access denied' };
+    }
+    if (command === 'git' && args[0] === 'rev-parse') {
+      return { code: 0, stdout: `${CLONE_SHA}\n`, stderr: '' };
+    }
+    if (command === 'git' && args[0] === 'diff') {
+      return { code: 0, stdout: 'diff --git a/README.md\n', stderr: '' };
+    }
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat, async (row) => {
+    rows.push(row);
+  });
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.body.status).toBe('error');
+    expect(response.body.response?.diff).toBe('diff --git a/README.md\n');
+    expect(response.body.response?.stdout).toBe('stopped');
+    expect(response.body.response?.stdout).not.toContain('"messages"');
+    expect(rows).toEqual([
+      expect.objectContaining({ status: 'error', step: 'goose', draftId: 'draft-1', inputTokens: 1_000_000 }),
+    ]);
+    expect(rows[0]).not.toHaveProperty('branch');
+  } finally {
+    await close(server);
+    await rm(root, { recursive: true, force: true });
+  }
+  expect(calls.some((call) => call.command === 'git' && call.args[0] === 'push')).toBe(false);
+});
+
+test('a missing git-pat writes no row', async () => {
+  const rows: SdlcRunRow[] = [];
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    unusedPaths(),
+    async () => sampleDraft(),
+    async () => {
+      throw new Error('project secret minivela/acme/git-pat is missing or unreadable');
+    },
+    async (row) => {
+      rows.push(row);
+    },
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.body.status).toBe('error');
+    expect(rows).toEqual([]);
+  } finally {
+    await close(server);
   }
 });
 
@@ -668,6 +919,7 @@ test('the minivela stack includes the goose runtime', () => {
       GOOSE_DISABLE_SESSION_NAMING: 'true',
       GOOSE_PATH_ROOT: '/tmp/goose',
       DRAFTS_TABLE_NAME: Match.anyValue(),
+      SDLC_RUNS_TABLE_NAME: Match.anyValue(),
     },
   });
   template.hasOutput('GooseRuntimeArn', {});
@@ -684,9 +936,9 @@ test('the minivela stack includes the goose runtime', () => {
   expect(policy).toContain('bedrock:InvokeModel');
   expect(policy).toContain(`foundation-model/${GOOSE_MODEL_ID}`);
   expect(policy).toContain('dynamodb:GetItem');
+  expect(policy).toContain('dynamodb:PutItem');
   expect(policy).not.toContain('bedrock:Retrieve');
   expect(policy).not.toContain('dynamodb:Query');
-  expect(policy).not.toContain('dynamodb:PutItem');
   expect(policy).not.toContain('s3:');
   expect(JSON.stringify(template.toJSON())).not.toContain('goose_smoke');
 });
