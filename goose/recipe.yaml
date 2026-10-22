@@ -25,5 +25,5 @@ extensions:
     name: developer
 settings:
   goose_provider: aws_bedrock
-  goose_model: deepseek.v3.2
+  goose_model: us.anthropic.claude-sonnet-4-6
   max_turns: 120
