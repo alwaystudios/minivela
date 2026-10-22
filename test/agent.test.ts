@@ -1,9 +1,24 @@
 import { answerFromMemory, parseInvokePayload } from '../lib/agent/answer.js';
 import { promptForInvoke, readTicketMarkdown } from '../lib/ticket.js';
-import { DRAFT_SYSTEM_PROMPT, draftWorkOrder, readWorkOrder } from '../lib/agent/draft.js';
+import {
+  DRAFT_SYSTEM_PROMPT,
+  draftCompletionFromModel,
+  draftWorkOrder,
+  fetchStoredDraft,
+  readWorkOrder,
+  type DraftWorkOrderRun,
+} from '../lib/agent/draft.js';
 import { RULE_PRECEDENCE } from '../lib/work-order.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
+
+const ignoreRuns = async (_row: DraftWorkOrderRun): Promise<void> => undefined;
+
+const sonnetUsage = {
+  model: 'us.anthropic.claude-sonnet-4-6',
+  startedAt: '2026-10-22T15:00:00.000Z',
+  finishedAt: '2026-10-22T15:00:01.000Z',
+};
 
 test('a retrieve for a client includes global', () => {
   expect(projectRetrieveValues('acme')).toEqual(['acme', 'global']);
@@ -411,6 +426,7 @@ test('draft-work-order stores a work order that names a mapped repo', async () =
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
     put,
+    putRun: ignoreRuns,
     draftId: 'draft-1',
     createdAt: '2026-10-15T21:00:00.000Z',
   });
@@ -471,6 +487,7 @@ test('draft-work-order can return the stored draft as markdown', async () => {
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
     put,
+    putRun: ignoreRuns,
     draftId: 'draft-1',
     createdAt: '2026-10-15T21:00:00.000Z',
     format: 'markdown',
@@ -561,6 +578,20 @@ test('read by id returns the stored json and writes nothing', async () => {
   expect(loadDecisions).not.toHaveBeenCalled();
   expect(JSON.parse(result.response).draftId).toBe(storedDraft.draftId);
   expect(result.status).toBe('success');
+});
+
+test('a fetch by draftId writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await fetchStoredDraft({
+    project: 'acme',
+    draftId: storedDraft.draftId,
+    get: jest.fn().mockResolvedValue(storedDraft),
+    loadDecisions: jest.fn(),
+    putRun,
+  });
+  expect(result.status).toBe('success');
+  expect(JSON.parse(result.response).draftId).toBe(storedDraft.draftId);
+  expect(putRun).not.toHaveBeenCalled();
 });
 
 test('read by id can return markdown for that row', async () => {
@@ -655,6 +686,7 @@ test('a ticket file is the document and the knowledge base is not retrieved', as
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(validDraftJson),
     put,
+    putRun: ignoreRuns,
     draftId: 'draft-ticket',
     createdAt: '2026-10-15T21:00:00.000Z',
   });
@@ -678,6 +710,7 @@ test('draft-work-order does not store when rules fail to load', async () => {
       loadRepos: jest.fn().mockResolvedValue([webRepo]),
       complete,
       put,
+      putRun: ignoreRuns,
       draftId: 'draft-rules',
       createdAt: '2026-10-15T21:00:00.000Z',
     });
@@ -708,6 +741,7 @@ test('draft-work-order does not store a repo that is not in the map', async () =
       }),
     ),
     put,
+    putRun: ignoreRuns,
     draftId: 'draft-2',
     createdAt: '2026-10-15T21:00:00.000Z',
   });
@@ -720,6 +754,7 @@ test('draft-work-order does not store a repo that is not in the map', async () =
 
 test('draft-work-order stops when the repo map is empty', async () => {
   const put = jest.fn().mockResolvedValue(undefined);
+  const putRun = jest.fn();
   const complete = jest.fn();
   const result = await draftWorkOrder({
     prompt: 'add CSV export',
@@ -730,12 +765,89 @@ test('draft-work-order stops when the repo map is empty', async () => {
     loadRepos: jest.fn().mockResolvedValue([]),
     complete,
     put,
+    putRun,
     draftId: 'draft-empty-map',
     createdAt: '2026-10-15T21:00:00.000Z',
   });
   expect(complete).not.toHaveBeenCalled();
   expect(put).not.toHaveBeenCalled();
+  expect(putRun).not.toHaveBeenCalled();
   expect(result).toEqual({ response: 'The repo map is empty.', status: 'refused' });
+});
+
+test('a draft-work-order whose model response has both counts writes one row', async () => {
+  const rows: DraftWorkOrderRun[] = [];
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: async () =>
+      draftCompletionFromModel({
+        text: validDraftJson,
+        ...sonnetUsage,
+        usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      }),
+    put: jest.fn().mockResolvedValue(undefined),
+    putRun: async (row) => {
+      rows.push(row);
+    },
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+  });
+  expect(result.status).toBe('success');
+  expect(JSON.parse(result.response).draftId).toBe('draft-1');
+  expect(rows).toEqual([
+    {
+      project: 'acme',
+      runId: expect.any(String),
+      step: 'draft-work-order',
+      model: 'us.anthropic.claude-sonnet-4-6',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      estimatedUsd: 18,
+      startedAt: sonnetUsage.startedAt,
+      finishedAt: sonnetUsage.finishedAt,
+      status: 'success',
+      draftId: 'draft-1',
+    },
+  ]);
+  expect(rows[0]).not.toHaveProperty('prompt');
+  expect(rows[0]).not.toHaveProperty('ticket');
+  expect(rows[0]).not.toHaveProperty('workOrder');
+  expect(rows[0]).not.toHaveProperty('branch');
+  expect(rows[0]).not.toHaveProperty('grade');
+  expect(rows[0]).not.toHaveProperty('breakdownId');
+  expect(rows[0]).not.toHaveProperty('repoUrl');
+  expect(JSON.stringify(rows[0])).not.toContain('add CSV export');
+});
+
+test('a model response with no input_tokens is an error and writes no row', async () => {
+  const put = jest.fn();
+  const putRun = jest.fn();
+  const result = await draftWorkOrder({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRules: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: async () =>
+      draftCompletionFromModel({
+        text: validDraftJson,
+        ...sonnetUsage,
+        usage: { output_tokens: 12 },
+      }),
+    put,
+    putRun,
+    draftId: 'draft-1',
+    createdAt: '2026-10-15T21:00:00.000Z',
+  });
+  expect(result).toEqual({ response: 'The draft model returned no token counts.', status: 'error' });
+  expect(put).not.toHaveBeenCalled();
+  expect(putRun).not.toHaveBeenCalled();
 });
 
 test('draft-work-order stops when the repo map fails to load', async () => {
@@ -752,6 +864,7 @@ test('draft-work-order stops when the repo map fails to load', async () => {
       loadRepos: jest.fn().mockRejectedValue(new Error('query failed')),
       complete,
       put,
+      putRun: ignoreRuns,
       draftId: 'draft-map-failed',
       createdAt: '2026-10-15T21:00:00.000Z',
     });
@@ -774,6 +887,7 @@ test('draft-work-order does not store when the model is blocked', async () => {
     loadRepos: jest.fn().mockResolvedValue([webRepo]),
     complete: jest.fn().mockResolvedValue(JSON.stringify({ blocked: 'No target repo exists.' })),
     put,
+    putRun: ignoreRuns,
     draftId: 'draft-3',
     createdAt: '2026-10-15T21:00:00.000Z',
   });

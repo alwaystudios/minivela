@@ -30,7 +30,14 @@ import type { DraftWrite } from '../work-order.js';
 import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
 import { BREAKDOWN_SYSTEM_PROMPT, draftBreakdown, TICKET_TEMPLATE_ID } from './draft-breakdown.js';
-import { draftWorkOrder, DRAFT_SYSTEM_PROMPT, readWorkOrder } from './draft.js';
+import {
+  draftCompletionFromModel,
+  draftWorkOrder,
+  DRAFT_SYSTEM_PROMPT,
+  fetchStoredDraft,
+  type DraftModelCompletion,
+  type DraftWorkOrderRun,
+} from './draft.js';
 import { checkReadiness, READINESS_SYSTEM_PROMPT } from './readiness.js';
 
 const retrieveClient = new BedrockAgentRuntimeClient({});
@@ -273,7 +280,7 @@ async function completeDraft(query: {
   decisions: RetrievedDecision[];
   rules: Rule[];
   repos: Repo[];
-}): Promise<string> {
+}): Promise<DraftModelCompletion> {
   const rulesContext =
     query.rules.length === 0
       ? '(no rules loaded)'
@@ -304,9 +311,11 @@ async function completeDraft(query: {
       : query.chunks
           .map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`)
           .join('\n\n');
+  const model = process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID;
+  const startedAt = new Date().toISOString();
   const response = await bedrock.send(
     new InvokeModelCommand({
-      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      modelId: model,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -322,10 +331,11 @@ async function completeDraft(query: {
       }),
     }),
   );
+  const finishedAt = new Date().toISOString();
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
     content?: Array<{ type?: string; text?: string }>;
     stop_reason?: string;
-    usage?: { output_tokens?: number };
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
   console.error(
@@ -336,10 +346,17 @@ async function completeDraft(query: {
       draftTypes: payload.content?.map((part) => part.type),
     }),
   );
-  if (!text) {
+  const completion = draftCompletionFromModel({
+    text,
+    model,
+    usage: payload.usage,
+    startedAt,
+    finishedAt,
+  });
+  if (!completion.text) {
     throw new Error('draft model returned no text');
   }
-  return text;
+  return completion;
 }
 
 async function completeBreakdown(query: {
@@ -429,6 +446,15 @@ async function putDraft(item: DraftWrite): Promise<void> {
   );
 }
 
+async function putSdlcRun(row: DraftWorkOrderRun): Promise<void> {
+  await docClient.send(
+    new PutCommand({
+      TableName: requiredEnv('SDLC_RUNS_TABLE_NAME'),
+      Item: row,
+    }),
+  );
+}
+
 async function queryBreakdown(key: { project: string; breakdownId: string }): Promise<unknown[]> {
   const result = await docClient.send(
     new DocQueryCommand(breakdownQueryInput(requiredEnv('BREAKDOWNS_TABLE_NAME'), key.project, key.breakdownId)),
@@ -510,12 +536,13 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     return;
   }
   if ('draftId' in parsedPayload) {
-    const result = await readWorkOrder({
+    const result = await fetchStoredDraft({
       project: parsedPayload.project,
       draftId: parsedPayload.draftId,
       format: parsedPayload.format,
       get: getDraft,
       loadDecisions: (ids) => loadCitedDecisions(parsedPayload.project, ids),
+      putRun: putSdlcRun,
     });
     json(res, 200, result);
     return;
@@ -557,6 +584,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             loadRepos,
             complete: completeDraft,
             put: putDraft,
+            putRun: putSdlcRun,
             draftId: randomUUID(),
             createdAt: new Date().toISOString(),
             format: parsedPayload.format,

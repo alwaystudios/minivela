@@ -18,7 +18,7 @@ test('the stack name defaults to minivela and a transcript put can write a decis
 
   expect(stack.stackName).toBe('minivela');
   template.resourceCountIs('AWS::S3::Bucket', 2);
-  template.resourceCountIs('AWS::DynamoDB::Table', 6);
+  template.resourceCountIs('AWS::DynamoDB::Table', 7);
   template.hasResource('AWS::S3::Bucket', { DeletionPolicy: 'Retain' });
   template.hasResourceProperties('AWS::DynamoDB::Table', {
     BillingMode: 'PAY_PER_REQUEST',
@@ -240,6 +240,7 @@ test('the knowledge base reads the documents bucket only', () => {
       RULES_TABLE_NAME: Match.anyValue(),
       REPOS_TABLE_NAME: Match.anyValue(),
       DRAFTS_TABLE_NAME: Match.anyValue(),
+      SDLC_RUNS_TABLE_NAME: Match.anyValue(),
       BREAKDOWNS_TABLE_NAME: Match.anyValue(),
       TEMPLATES_TABLE_NAME: Match.anyValue(),
       DOCUMENTS_BUCKET_NAME: Match.anyValue(),
@@ -258,6 +259,33 @@ test('the knowledge base reads the documents bucket only', () => {
   );
   expect(breakdownTableId).toBeDefined();
   expect(agentPolicy.split(breakdownTableId ?? '').length - 1).toBe(3);
+  const draftsTableId = Object.keys(template.findResources('AWS::DynamoDB::Table')).find((id) =>
+    JSON.stringify(template.findResources('AWS::DynamoDB::Table')[id].Properties.KeySchema).includes('draftId'),
+  );
+  const sdlcRunsTableId = Object.keys(template.findResources('AWS::DynamoDB::Table')).find((id) =>
+    JSON.stringify(template.findResources('AWS::DynamoDB::Table')[id].Properties.KeySchema).includes('runId'),
+  );
+  expect(draftsTableId).toBeDefined();
+  expect(sdlcRunsTableId).toBeDefined();
+  const putStatements = agentPolicies.flatMap((policy) => {
+    const statement = policy.Properties.PolicyDocument.Statement;
+    const statements = Array.isArray(statement) ? statement : [statement];
+    return statements.filter((item: { Action?: string | string[] }) => {
+      const actions = Array.isArray(item.Action) ? item.Action : [item.Action];
+      return actions.includes('dynamodb:PutItem');
+    });
+  });
+  const resourceText = (statement: { Resource?: unknown }) => JSON.stringify(statement.Resource);
+  const draftPut = putStatements.find(
+    (statement) =>
+      resourceText(statement).includes(draftsTableId ?? '') && resourceText(statement).includes(breakdownTableId ?? ''),
+  );
+  const sdlcPut = putStatements.find((statement) => resourceText(statement).includes(sdlcRunsTableId ?? ''));
+  expect(draftPut).toBeDefined();
+  expect(resourceText(draftPut ?? {})).not.toContain(sdlcRunsTableId);
+  expect(sdlcPut).toBeDefined();
+  expect(resourceText(sdlcPut ?? {})).not.toContain(draftsTableId);
+  expect(resourceText(sdlcPut ?? {})).not.toContain(breakdownTableId);
   const templatesTableId = Object.keys(template.findResources('AWS::DynamoDB::Table')).find((id) =>
     JSON.stringify(template.findResources('AWS::DynamoDB::Table')[id].Properties.KeySchema).includes('templateId'),
   );
