@@ -22,7 +22,8 @@ export function estimateSdlcRun(params: SdlcRunEstimateInput): SdlcRunEstimateRe
   const inputPricePerMillion = 0.62;
   const outputPricePerMillion = 1.85;
 
-  const estimatedUsd = (params.inputTokens * inputPricePerMillion + params.outputTokens * outputPricePerMillion) / 1_000_000;
-  
+  const estimatedUsd =
+    (params.inputTokens * inputPricePerMillion + params.outputTokens * outputPricePerMillion) / 1_000_000;
+
   return { estimatedUsd };
 }

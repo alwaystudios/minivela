@@ -1,11 +1,14 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { chmod, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import { isDraftWrite } from '../lib/agent/draft.js';
+import { GOOSE_MODEL_ID } from '../lib/models.js';
 import { getProjectSecret, projectSecretName } from '../lib/project-secret.js';
+import { estimateSdlcRun } from '../lib/sdlc-run.js';
 import { formatDraftMarkdown, type DraftWrite } from '../lib/work-order.js';
 
 export const GOOSE_RECIPE_PATH = '/opt/goose/recipe.yaml';
@@ -42,6 +45,30 @@ export type DraftLoader = (key: { project: string; draftId: string }) => Promise
 
 export type SecretReader = (project: string, name: string) => Promise<string>;
 
+export type SdlcRunRow = {
+  project: string;
+  runId: string;
+  step: 'goose';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  startedAt: string;
+  finishedAt: string;
+  status: 'success' | 'error';
+  draftId: string;
+  repoUrl: string;
+  branch?: string;
+};
+
+export type SdlcRunWriter = (row: SdlcRunRow) => Promise<void>;
+
+export type GooseUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  assistantText: string;
+};
+
 const GIT_PAT = 'git-pat';
 
 export const GOOSE_ASKPASS_PATH = '/tmp/goose-askpass';
@@ -76,6 +103,82 @@ function succeeded(diff: string, stdout: string, branch: string): GooseInvokeRes
 
 export function gooseBranch(draftId: string): string {
   return `goose/${draftId}`;
+}
+
+export function readGooseRun(stdout: string): GooseUsage | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const metadata = (parsed as { metadata?: unknown }).metadata;
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const inputTokens = (metadata as { input_tokens?: unknown }).input_tokens;
+  const outputTokens = (metadata as { output_tokens?: unknown }).output_tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) {
+    return undefined;
+  }
+  return {
+    inputTokens,
+    outputTokens,
+    assistantText: lastAssistantText((parsed as { messages?: unknown }).messages),
+  };
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function lastAssistantText(messages: unknown): string {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message === null || typeof message !== 'object') {
+      continue;
+    }
+    const role = (message as { role?: unknown }).role;
+    if (typeof role !== 'string' || role.toLowerCase() !== 'assistant') {
+      continue;
+    }
+    const text = contentText((message as { content?: unknown }).content);
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  return '';
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return '';
+  }
+  return content
+    .map((part) => {
+      if (typeof part === 'string') {
+        return part;
+      }
+      if (part === null || typeof part !== 'object') {
+        return '';
+      }
+      const record = part as { type?: unknown; text?: unknown };
+      if (record.type !== undefined && record.type !== 'text') {
+        return '';
+      }
+      return typeof record.text === 'string' ? record.text : '';
+    })
+    .filter((part) => part.length > 0)
+    .join('');
 }
 
 export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
@@ -186,6 +289,7 @@ export function createGooseServer(
   },
   loadDraft: DraftLoader = getDraftFromTable,
   readSecret: SecretReader = getProjectSecret,
+  putRun: SdlcRunWriter = putSdlcRun,
 ): Server {
   let busy = false;
   let statusChangedAt = unixSeconds();
@@ -213,7 +317,7 @@ export function createGooseServer(
           return;
         }
         if (req.method === 'POST' && req.url === '/invocations') {
-          await handleInvocation(req, res, run, paths, loadDraft, readSecret, () => busy, setBusy);
+          await handleInvocation(req, res, run, paths, loadDraft, readSecret, putRun, () => busy, setBusy);
           return;
         }
         json(res, 404, failed('not found'));
@@ -233,6 +337,7 @@ async function handleInvocation(
   paths: GoosePaths,
   loadDraft: DraftLoader,
   readSecret: SecretReader,
+  putRun: SdlcRunWriter,
   isBusy: () => boolean,
   setBusy: (next: boolean) => void,
 ): Promise<void> {
@@ -284,8 +389,9 @@ async function handleInvocation(
       json(res, 200, failed(message, { diff: '', stdout: '' }));
       return;
     }
-    const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths, {
+    const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths, putRun, {
       token,
+      project: parsed.project,
       draftId: parsed.draftId,
     });
     console.log(
@@ -360,13 +466,27 @@ async function getDraftFromTable(key: { project: string; draftId: string }): Pro
   return result.Item;
 }
 
+async function putSdlcRun(row: SdlcRunRow): Promise<void> {
+  const table = process.env.SDLC_RUNS_TABLE_NAME;
+  if (!table) {
+    throw new Error('SDLC_RUNS_TABLE_NAME is not set');
+  }
+  await DynamoDBDocumentClient.from(new DynamoDBClient({})).send(
+    new PutCommand({
+      TableName: table,
+      Item: row,
+    }),
+  );
+}
+
 async function applyWorkOrder(
   repoUrl: string,
   task: string,
   target: TargetRepo,
   run: CommandRunner,
   paths: GoosePaths,
-  apply: { token: string; draftId: string },
+  putRun: SdlcRunWriter,
+  apply: { token: string; project: string; draftId: string },
 ): Promise<GooseInvokeResult> {
   await rm(paths.workspace, { recursive: true, force: true });
   const clone = await run('git', ['clone', '--depth', '1', repoUrl, paths.workspace]);
@@ -383,6 +503,7 @@ async function applyWorkOrder(
   await writeFile(paths.targetPath, `${target.owner}/${target.repo}\n`, { mode: 0o600 });
   await chmod(paths.targetPath, 0o600);
   const gooseArgs = gooseArguments(paths.recipePath);
+  const startedAt = new Date().toISOString();
   let goose: CommandResult;
   try {
     goose = await run(gooseArgs[0], gooseArgs.slice(1), paths.workspace);
@@ -390,39 +511,50 @@ async function applyWorkOrder(
     const message = error instanceof Error ? error.message : 'goose failed';
     goose = { code: 1, stdout: '', stderr: message };
   }
+  const finishedAt = new Date().toISOString();
+  const usage = readGooseRun(goose.stdout);
+  const stdout = truncate(usage?.assistantText ?? '');
   const add = await run('git', ['add', '-A'], paths.workspace);
   const diff =
     add.code === 0
       ? await run('git', ['diff', '--cached', base], paths.workspace)
       : { code: add.code, stdout: '', stderr: add.stderr };
-  const stdout = truncate(goose.stdout);
+  const finish = (result: GooseInvokeResult): Promise<GooseInvokeResult> =>
+    recordRun(result, putRun, usage, {
+      project: apply.project,
+      draftId: apply.draftId,
+      repoUrl,
+      startedAt,
+      finishedAt,
+      stdout,
+    });
   if (goose.code !== 0) {
-    return failed(commandFailure('goose', goose), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('goose', goose), { diff: diff.stdout, stdout }));
   }
   if (add.code !== 0) {
-    return failed(commandFailure('git add', add), { diff: '', stdout });
+    return finish(failed(commandFailure('git add', add), { diff: '', stdout }));
   }
   if (diff.code !== 0) {
-    return failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout }));
   }
   if (diff.stdout.trim().length === 0) {
-    return failed('Goose made no changes', { diff: '', stdout });
+    return finish(failed('Goose made no changes', { diff: '', stdout }));
   }
   const branch = gooseBranch(apply.draftId);
   const remote = await run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], paths.workspace);
   if (remote.code !== 0) {
-    return failed(commandFailure('git ls-remote', remote), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git ls-remote', remote), { diff: diff.stdout, stdout }));
   }
   if (remote.stdout.trim().length > 0) {
-    return failed(`branch ${branch} already exists`, { diff: diff.stdout, stdout });
+    return finish(failed(`branch ${branch} already exists`, { diff: diff.stdout, stdout }));
   }
   const checkout = await run('git', ['checkout', '-b', branch], paths.workspace);
   if (checkout.code !== 0) {
-    return failed(commandFailure('git checkout', checkout), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git checkout', checkout), { diff: diff.stdout, stdout }));
   }
   const reset = await run('git', ['reset', '--soft', base], paths.workspace);
   if (reset.code !== 0) {
-    return failed(commandFailure('git reset', reset), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git reset', reset), { diff: diff.stdout, stdout }));
   }
   const commit = await run(
     'git',
@@ -438,7 +570,7 @@ async function applyWorkOrder(
     paths.workspace,
   );
   if (commit.code !== 0) {
-    return failed(commandFailure('git commit', commit), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git commit', commit), { diff: diff.stdout, stdout }));
   }
   await writeFile(GOOSE_ASKPASS_PATH, ASKPASS_SCRIPT, { mode: 0o700 });
   await chmod(GOOSE_ASKPASS_PATH, 0o700);
@@ -448,9 +580,63 @@ async function applyWorkOrder(
     GOOSE_GIT_PAT: apply.token,
   });
   if (push.code !== 0) {
-    return failed(commandFailure('git push', push), { diff: diff.stdout, stdout });
+    return finish(failed(commandFailure('git push', push), { diff: diff.stdout, stdout }));
   }
-  return succeeded(diff.stdout, stdout, branch);
+  return finish(succeeded(diff.stdout, stdout, branch));
+}
+
+async function recordRun(
+  result: GooseInvokeResult,
+  putRun: SdlcRunWriter,
+  usage: GooseUsage | undefined,
+  run: {
+    project: string;
+    draftId: string;
+    repoUrl: string;
+    startedAt: string;
+    finishedAt: string;
+    stdout: string;
+  },
+): Promise<GooseInvokeResult> {
+  if (usage === undefined) {
+    if (result.status === 'success') {
+      return failed('goose output has no token counts', { diff: result.response.diff ?? '', stdout: run.stdout });
+    }
+    return result;
+  }
+  const priced = estimateSdlcRun({
+    modelId: GOOSE_MODEL_ID,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+  });
+  if (!('estimatedUsd' in priced)) {
+    if (result.status === 'success') {
+      return failed('goose output has no token counts', { diff: result.response.diff ?? '', stdout: run.stdout });
+    }
+    return result;
+  }
+  const row: SdlcRunRow = {
+    project: run.project,
+    runId: randomUUID(),
+    step: 'goose',
+    model: GOOSE_MODEL_ID,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    estimatedUsd: priced.estimatedUsd,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    status: result.status,
+    draftId: run.draftId,
+    repoUrl: run.repoUrl,
+    ...(result.response.branch === undefined ? {} : { branch: result.response.branch }),
+  };
+  try {
+    await putRun(row);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'the run row failed to write';
+    return failed(message, { diff: result.response.diff ?? '', stdout: run.stdout });
+  }
+  return result;
 }
 
 function commandFailure(command: string, result: CommandResult): string {
