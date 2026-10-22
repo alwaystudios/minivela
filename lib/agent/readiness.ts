@@ -62,7 +62,10 @@ export async function checkReadiness(input: {
   const text = typeof completed === 'string' ? completed : completed.text;
   const usage = typeof completed === 'string' ? undefined : completed;
   const status: AnswerStatus = 'success';
-  await recordReadinessRun(input, usage, status);
+  const recorded = await recordReadinessRun(input, usage, status);
+  if (recorded === 'unknown') {
+    return { response: 'The readiness model is unknown.', status: 'error' };
+  }
   return { response: text, status };
 }
 
@@ -70,9 +73,9 @@ async function recordReadinessRun(
   input: { project: string; putRun: (row: CheckReadinessRun) => Promise<void> },
   usage: ReadinessModelCompletion | undefined,
   status: AnswerStatus,
-): Promise<void> {
+): Promise<'ok' | 'unknown'> {
   if (usage === undefined) {
-    return;
+    return 'ok';
   }
   const priced = estimateSdlcRun({
     modelId: usage.model,
@@ -80,7 +83,7 @@ async function recordReadinessRun(
     outputTokens: usage.outputTokens,
   });
   if (!('estimatedUsd' in priced)) {
-    return;
+    return 'unknown';
   }
   try {
     await input.putRun({
@@ -98,6 +101,7 @@ async function recordReadinessRun(
   } catch (error) {
     console.error(error);
   }
+  return 'ok';
 }
 
 export const READINESS_SYSTEM_PROMPT =

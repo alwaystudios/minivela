@@ -312,7 +312,10 @@ export async function answerFromMemory(input: {
   const text = typeof completed === 'string' ? completed : completed.text;
   const usage = typeof completed === 'string' ? undefined : completed;
   const status: AnswerStatus = 'success';
-  await recordAnswerRun(input, usage, status);
+  const recorded = await recordAnswerRun(input, usage, status);
+  if (recorded === 'unknown') {
+    return { response: 'The answer model is unknown.', status: 'error' };
+  }
   return { response: text, status };
 }
 
@@ -320,9 +323,9 @@ async function recordAnswerRun(
   input: { project: string; putRun: (row: AnswerRun) => Promise<void> },
   usage: AnswerModelCompletion | undefined,
   status: AnswerStatus,
-): Promise<void> {
+): Promise<'ok' | 'unknown'> {
   if (usage === undefined) {
-    return;
+    return 'ok';
   }
   const priced = estimateSdlcRun({
     modelId: usage.model,
@@ -330,7 +333,7 @@ async function recordAnswerRun(
     outputTokens: usage.outputTokens,
   });
   if (!('estimatedUsd' in priced)) {
-    return;
+    return 'unknown';
   }
   try {
     await input.putRun({
@@ -348,6 +351,7 @@ async function recordAnswerRun(
   } catch (error) {
     console.error(error);
   }
+  return 'ok';
 }
 
 export function retrievalFilterFor(project: string): ReturnType<typeof projectRetrieveFilter> {

@@ -9,6 +9,7 @@ import {
   type DraftWorkOrderRun,
 } from '../lib/agent/draft.js';
 import { RULE_PRECEDENCE } from '../lib/work-order.js';
+import { fetchStoredBreakdown } from '../lib/agent/draft-breakdown.js';
 import { checkReadiness } from '../lib/agent/readiness.js';
 import { projectRetrieveFilter, projectRetrieveValues } from '../lib/project-filter.js';
 
@@ -1026,15 +1027,79 @@ test('a plain answer whose model response has both counts writes one row with st
 });
 
 test('a fetch by draftId writes no row and a fetch by breakdownId writes no row', async () => {
-  const putRun = jest.fn();
+  const draftPutRun = jest.fn();
   const draftResult = await fetchStoredDraft({
     project: 'acme',
     draftId: storedDraft.draftId,
     get: jest.fn().mockResolvedValue(storedDraft),
     loadDecisions: jest.fn(),
-    putRun,
+    putRun: draftPutRun,
   });
   expect(draftResult.status).toBe('success');
+  expect(draftPutRun).not.toHaveBeenCalled();
+
+  const breakdownPutRun = jest.fn();
+  const breakdownResult = await fetchStoredBreakdown({
+    project: 'acme',
+    breakdownId: 'bd-1',
+    query: async () => [
+      {
+        project: 'acme',
+        ticketId: 'bd-1#0',
+        breakdownId: 'bd-1',
+        kind: 'epic',
+        ordinal: 0,
+        body: '# Bill the new meter',
+        createdAt: '2026-10-22T15:00:00.000Z',
+        page: 'acme/notes/billing.md',
+      },
+    ],
+    putRun: breakdownPutRun,
+  });
+  expect(breakdownResult.status).toBe('success');
+  expect(breakdownPutRun).not.toHaveBeenCalled();
+});
+
+test('an unknown answer model is status error and writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await answerFromMemory({
+    prompt: 'the export RFC',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    complete: async () => ({
+      text: 'CSV only.',
+      model: 'missing.model',
+      inputTokens: 10,
+      outputTokens: 10,
+      startedAt: '2026-10-22T15:00:00.000Z',
+      finishedAt: '2026-10-22T15:00:01.000Z',
+    }),
+    putRun,
+  });
+  expect(result).toEqual({ response: 'The answer model is unknown.', status: 'error' });
+  expect(putRun).not.toHaveBeenCalled();
+});
+
+test('an unknown readiness model is status error and writes no row', async () => {
+  const putRun = jest.fn();
+  const result = await checkReadiness({
+    prompt: 'add CSV export',
+    project: 'acme',
+    retrieve: jest.fn().mockResolvedValue([]),
+    searchDecisions: jest.fn().mockResolvedValue([]),
+    loadRepos: jest.fn().mockResolvedValue([webRepo]),
+    complete: async () => ({
+      text: 'Ready. Target acme/web.',
+      model: 'missing.model',
+      inputTokens: 10,
+      outputTokens: 10,
+      startedAt: '2026-10-22T15:00:00.000Z',
+      finishedAt: '2026-10-22T15:00:01.000Z',
+    }),
+    putRun,
+  });
+  expect(result).toEqual({ response: 'The readiness model is unknown.', status: 'error' });
   expect(putRun).not.toHaveBeenCalled();
 });
 
