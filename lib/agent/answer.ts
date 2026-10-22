@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { projectRetrieveFilter } from '../project-filter.js';
+import { estimateSdlcRun } from '../sdlc-run.js';
 import type { RetrievedDecision } from '../search-decisions.js';
 import { isDocumentsPageKey, isTicketKey } from '../ticket.js';
 import type { DraftResponseFormat } from '../work-order.js';
@@ -11,6 +13,83 @@ export type RetrievedChunk = {
 };
 
 export type AnswerStatus = 'success' | 'error' | 'refused';
+
+export type AnswerModelCompletion = {
+  text: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export type ReadinessModelCompletion = {
+  text: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  startedAt: string;
+  finishedAt: string;
+};
+
+export class AnswerModelUsageError extends Error {
+  constructor() {
+    super('answer model response is missing token counts');
+    this.name = 'AnswerModelUsageError';
+  }
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+export function readinessCompletionFromModel(input: {
+  text: string;
+  model: string;
+  usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+  startedAt: string;
+  finishedAt: string;
+}): ReadinessModelCompletion {
+  const inputTokens = input.usage?.input_tokens;
+  const outputTokens = input.usage?.output_tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) {
+    throw new AnswerModelUsageError();
+  }
+  return {
+    text: input.text,
+    model: input.model,
+    inputTokens,
+    outputTokens,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+  };
+}
+
+export type CheckReadinessRun = {
+  project: string;
+  runId: string;
+  step: 'check-readiness';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  startedAt: string;
+  finishedAt: string;
+  status: AnswerStatus;
+};
+
+export type AnswerRun = {
+  project: string;
+  runId: string;
+  step: 'answer';
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  startedAt: string;
+  finishedAt: string;
+  status: AnswerStatus;
+};
 
 export type AnswerResult = {
   response: string;
@@ -172,6 +251,28 @@ function parseFormat(value: unknown): DraftResponseFormat | undefined | AnswerRe
   return format;
 }
 
+export function answerCompletionFromModel(input: {
+  text: string;
+  model: string;
+  usage: { input_tokens?: unknown; output_tokens?: unknown } | undefined;
+  startedAt: string;
+  finishedAt: string;
+}): AnswerModelCompletion {
+  const inputTokens = input.usage?.input_tokens;
+  const outputTokens = input.usage?.output_tokens;
+  if (!isTokenCount(inputTokens) || !isTokenCount(outputTokens)) {
+    throw new AnswerModelUsageError();
+  }
+  return {
+    text: input.text,
+    model: input.model,
+    inputTokens,
+    outputTokens,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+  };
+}
+
 export async function answerFromMemory(input: {
   prompt: string;
   project: string;
@@ -183,7 +284,8 @@ export async function answerFromMemory(input: {
     project: string;
     chunks: RetrievedChunk[];
     decisions: RetrievedDecision[];
-  }) => Promise<string>;
+  }) => Promise<string | AnswerModelCompletion>;
+  putRun: (row: AnswerRun) => Promise<void>;
 }): Promise<AnswerResult> {
   const chunksPromise = input.ticketDocument
     ? Promise.resolve([input.ticketDocument])
@@ -193,13 +295,63 @@ export async function answerFromMemory(input: {
     return [];
   });
   const chunks = await chunksPromise;
-  const response = await input.complete({
-    prompt: input.prompt,
-    project: input.project,
-    chunks,
-    decisions,
+  let completed: string | AnswerModelCompletion;
+  try {
+    completed = await input.complete({
+      prompt: input.prompt,
+      project: input.project,
+      chunks,
+      decisions,
+    });
+  } catch (error) {
+    if (error instanceof AnswerModelUsageError) {
+      return { response: 'The answer model returned no token counts.', status: 'error' };
+    }
+    throw error;
+  }
+  const text = typeof completed === 'string' ? completed : completed.text;
+  const usage = typeof completed === 'string' ? undefined : completed;
+  const status: AnswerStatus = 'success';
+  const recorded = await recordAnswerRun(input, usage, status);
+  if (recorded === 'unknown') {
+    return { response: 'The answer model is unknown.', status: 'error' };
+  }
+  return { response: text, status };
+}
+
+async function recordAnswerRun(
+  input: { project: string; putRun: (row: AnswerRun) => Promise<void> },
+  usage: AnswerModelCompletion | undefined,
+  status: AnswerStatus,
+): Promise<'ok' | 'unknown'> {
+  if (usage === undefined) {
+    return 'ok';
+  }
+  const priced = estimateSdlcRun({
+    modelId: usage.model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
   });
-  return { response, status: 'success' };
+  if (!('estimatedUsd' in priced)) {
+    return 'unknown';
+  }
+  try {
+    await input.putRun({
+      project: input.project,
+      runId: randomUUID(),
+      step: 'answer',
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd: priced.estimatedUsd,
+      startedAt: usage.startedAt,
+      finishedAt: usage.finishedAt,
+      status,
+    });
+  } catch (error) {
+    console.error(error);
+  }
+  return 'ok';
 }
 
 export function retrievalFilterFor(project: string): ReturnType<typeof projectRetrieveFilter> {

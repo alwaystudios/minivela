@@ -28,7 +28,7 @@ import {
 import { breakdownQueryInput, type BreakdownRow } from '../breakdown.js';
 import type { DraftWrite } from '../work-order.js';
 import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
-import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
+import { answerFromMemory, answerCompletionFromModel, readinessCompletionFromModel, parseInvokePayload, retrievalFilterFor, type AnswerModelCompletion, type AnswerRun, type CheckReadinessRun, type ReadinessModelCompletion, type RetrievedChunk } from './answer.js';
 import {
   BREAKDOWN_SYSTEM_PROMPT,
   breakdownCompletionFromModel,
@@ -177,7 +177,7 @@ async function complete(query: {
   project: string;
   chunks: RetrievedChunk[];
   decisions: RetrievedDecision[];
-}): Promise<string> {
+}): Promise<AnswerModelCompletion> {
   const decisionsContext =
     query.decisions.length === 0
       ? '(no decisions)'
@@ -193,9 +193,11 @@ async function complete(query: {
       : query.chunks
           .map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`)
           .join('\n\n');
+  const model = process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID;
+  const startedAt = new Date().toISOString();
   const response = await bedrock.send(
     new InvokeModelCommand({
-      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      modelId: model,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -212,14 +214,16 @@ async function complete(query: {
       }),
     }),
   );
+  const finishedAt = new Date().toISOString();
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
     content?: Array<{ text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
   if (!text) {
     throw new Error('answer model returned no text');
   }
-  return text;
+  return answerCompletionFromModel({ text, model, usage: payload.usage, startedAt, finishedAt });
 }
 
 async function completeReadiness(query: {
@@ -228,7 +232,7 @@ async function completeReadiness(query: {
   chunks: RetrievedChunk[];
   decisions: RetrievedDecision[];
   repos: Repo[];
-}): Promise<string> {
+}): Promise<ReadinessModelCompletion> {
   const reposContext =
     query.repos.length === 0
       ? '(no repos)'
@@ -253,9 +257,11 @@ async function completeReadiness(query: {
       : query.chunks
           .map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`)
           .join('\n\n');
+  const model = process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID;
+  const startedAt = new Date().toISOString();
   const response = await bedrock.send(
     new InvokeModelCommand({
-      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      modelId: model,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -271,14 +277,16 @@ async function completeReadiness(query: {
       }),
     }),
   );
+  const finishedAt = new Date().toISOString();
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
     content?: Array<{ text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
   if (!text) {
     throw new Error('answer model returned no text');
   }
-  return text;
+  return readinessCompletionFromModel({ text, model, usage: payload.usage, startedAt, finishedAt });
 }
 
 async function completeDraft(query: {
@@ -465,7 +473,7 @@ async function putDraft(item: DraftWrite): Promise<void> {
   );
 }
 
-async function putSdlcRun(row: DraftWorkOrderRun | DraftBreakdownRun): Promise<void> {
+async function putSdlcRun(row: DraftWorkOrderRun | DraftBreakdownRun | CheckReadinessRun | AnswerRun): Promise<void> {
   await docClient.send(
     new PutCommand({
       TableName: requiredEnv('SDLC_RUNS_TABLE_NAME'),
@@ -593,6 +601,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
           searchDecisions,
           loadRepos,
           complete: completeReadiness,
+          putRun: putSdlcRun,
         })
       : parsedPayload.skill === 'draft-work-order'
         ? await draftWorkOrder({
@@ -617,6 +626,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
             retrieve,
             searchDecisions,
             complete,
+            putRun: putSdlcRun,
           });
   json(res, 200, result);
 }
