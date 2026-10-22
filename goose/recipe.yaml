@@ -17,6 +17,8 @@ prompt: |
   If a step premise fails, skip that step and continue.
   Do not try to satisfy a human-verified acceptance line.
   The edit is complete only when every acceptance line that is not human-verified is satisfied in the checkout. Stop when that is true, or when a stop premise failed.
+  A test title does not satisfy an acceptance line. Each clause needs an assertion.
+  If the order names a status or outcome, do not copy a nearby function that does something else.
   Do not push.
   Do not open a pull request.
   Do not call any remote MCP server.
