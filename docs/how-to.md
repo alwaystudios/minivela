@@ -150,7 +150,7 @@ aws bedrock-agentcore invoke-agent-runtime \
   outfile.json
 ```
 
-Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. Pass `project` and `draftId` to load a stored work order. This invoke applies one repository. When the order names one repo, that is the clone. When it names more than one, pass `repo` as `owner/repo`. Goose edits a shallow clone and does not push. The body is `{ status, response }` like the agent. `response` holds `diff` and `stdout`. An empty diff is `status: error`. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
+Deploy prints `GooseRuntimeArn`. That runtime runs [Goose](https://goose-docs.ai/) on `deepseek.v3.2`. Pass `project` and `draftId` to load a stored work order. This invoke applies one repository. When the order names one repo, that is the clone. When it names more than one, pass `repo` as `owner/repo`. Goose loads the project secret `git-pat` before it clones. A missing or unreadable secret is `status: error` and Goose does not run. Goose edits a shallow clone and does not push. The body is `{ status, response }` like the agent. `response` holds `diff` and `stdout`. An empty diff is `status: error`. The caller identity needs `bedrock-agentcore:InvokeAgentRuntime` on this runtime ARN and its `DEFAULT` endpoint, the same as the agent.
 
 ```bash
 SESSION=$(uuidgen)

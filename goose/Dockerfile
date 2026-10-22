@@ -11,7 +11,7 @@ RUN tar -xzf /tmp/goose.tar.gz -C /usr/local/bin \
 WORKDIR /opt
 COPY goose/server.ts /opt/src/goose/server.ts
 COPY lib /opt/src/lib
-RUN npm install --omit=dev esbuild @aws-sdk/client-dynamodb@3.1152.0 @aws-sdk/lib-dynamodb@3.1152.0 \
+RUN npm install --omit=dev esbuild @aws-sdk/client-dynamodb@3.1152.0 @aws-sdk/lib-dynamodb@3.1152.0 @aws-sdk/client-secrets-manager@3.1152.0 \
  && npx esbuild /opt/src/goose/server.ts --bundle --platform=node --format=cjs --outfile=/opt/goose/server.js
 
 ENV GOOSE_PROVIDER=aws_bedrock \
