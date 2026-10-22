@@ -204,19 +204,23 @@ async function recordDraftRun(
   if (!('estimatedUsd' in priced)) {
     return;
   }
-  await input.putRun({
-    project: input.project,
-    runId: randomUUID(),
-    step: 'draft-work-order',
-    model: usage.model,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    estimatedUsd: priced.estimatedUsd,
-    startedAt: usage.startedAt,
-    finishedAt: usage.finishedAt,
-    status,
-    draftId: input.draftId,
-  });
+  try {
+    await input.putRun({
+      project: input.project,
+      runId: randomUUID(),
+      step: 'draft-work-order',
+      model: usage.model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      estimatedUsd: priced.estimatedUsd,
+      startedAt: usage.startedAt,
+      finishedAt: usage.finishedAt,
+      status,
+      draftId: input.draftId,
+    });
+  } catch (error) {
+    console.error(error);
+  }
 }
 
 function isTokenCount(value: unknown): value is number {

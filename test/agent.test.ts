@@ -824,6 +824,35 @@ test('a draft-work-order whose model response has both counts writes one row', a
   expect(JSON.stringify(rows[0])).not.toContain('add CSV export');
 });
 
+test('a failed SdlcRuns write still returns the stored draft', async () => {
+  const error = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    const result = await draftWorkOrder({
+      prompt: 'add CSV export',
+      project: 'acme',
+      retrieve: jest.fn().mockResolvedValue([{ text: 'single table', uri: 's3://doc/rfc.md' }]),
+      searchDecisions: jest.fn().mockResolvedValue([]),
+      loadRules: jest.fn().mockResolvedValue([]),
+      loadRepos: jest.fn().mockResolvedValue([webRepo]),
+      complete: async () =>
+        draftCompletionFromModel({
+          text: validDraftJson,
+          ...sonnetUsage,
+          usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+        }),
+      put: jest.fn().mockResolvedValue(undefined),
+      putRun: jest.fn().mockRejectedValue(new Error('put failed')),
+      draftId: 'draft-1',
+      createdAt: '2026-10-15T21:00:00.000Z',
+    });
+    expect(result.status).toBe('success');
+    expect(JSON.parse(result.response).draftId).toBe('draft-1');
+    expect(error).toHaveBeenCalled();
+  } finally {
+    error.mockRestore();
+  }
+});
+
 test('a model response with no input_tokens is an error and writes no row', async () => {
   const put = jest.fn();
   const putRun = jest.fn();
