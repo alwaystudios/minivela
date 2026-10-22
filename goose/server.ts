@@ -119,8 +119,15 @@ function invokeBody(result: GooseInvokeResult): { status: GooseInvokeResult['sta
   return { status: result.status, response: result.response };
 }
 
+const UNPARSED_TOOL_CALL = 'unparsed tool call';
+const DSML_MARKERS = ['<｜DSML｜function_calls', '<｜DSML｜invoke'];
+
 export function gooseBranch(draftId: string): string {
   return `goose/${draftId}`;
+}
+
+function hasUnparsedToolCall(text: string): boolean {
+  return DSML_MARKERS.some((marker) => text.includes(marker));
 }
 
 export function readGooseRun(stdout: string): GooseUsage | undefined {
@@ -524,23 +531,11 @@ async function applyWorkOrder(
   await chmod(paths.taskPath, 0o600);
   await writeFile(paths.targetPath, `${target.owner}/${target.repo}\n`, { mode: 0o600 });
   await chmod(paths.targetPath, 0o600);
-  const gooseArgs = gooseArguments(paths.recipePath);
-  const startedAt = new Date().toISOString();
-  let goose: CommandResult;
-  try {
-    goose = await run(gooseArgs[0], gooseArgs.slice(1), paths.workspace);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'goose failed';
-    goose = { code: 1, stdout: '', stderr: message };
+  let attempt = await captureGooseAttempt(run, paths, base);
+  if (isUnparsedToolCall(attempt)) {
+    attempt = await captureGooseAttempt(run, paths, base);
   }
-  const finishedAt = new Date().toISOString();
-  const usage = readGooseRun(goose.stdout);
-  const stdout = truncate(usage?.assistantText ?? '');
-  const add = await run('git', ['add', '-A'], paths.workspace);
-  const diff =
-    add.code === 0
-      ? await run('git', ['diff', '--cached', base], paths.workspace)
-      : { code: add.code, stdout: '', stderr: add.stderr };
+  const { goose, usage, stdout, add, diff, startedAt, finishedAt } = attempt;
   const finish = async (result: GooseInvokeResult): Promise<GooseInvokeResult> => {
     const recorded = await recordRun(result, putRun, usage, {
       project: apply.project,
@@ -567,6 +562,9 @@ async function applyWorkOrder(
     return finish(failed(commandFailure('git diff', diff), { diff: diff.stdout, stdout }, goose.code));
   }
   if (diff.stdout.trim().length === 0) {
+    if (hasUnparsedToolCall(attempt.assistantText)) {
+      return finish(failed(UNPARSED_TOOL_CALL, { diff: '', stdout }, goose.code, UNPARSED_TOOL_CALL));
+    }
     return finish(failed('Goose made no changes', { diff: '', stdout }, goose.code));
   }
   if (pricedGooseUsage(usage) === undefined) {
@@ -639,6 +637,49 @@ async function applyWorkOrder(
     };
   }
   return recorded;
+}
+
+type GooseAttempt = {
+  goose: CommandResult;
+  usage: GooseUsage | undefined;
+  assistantText: string;
+  stdout: string;
+  add: CommandResult;
+  diff: CommandResult;
+  startedAt: string;
+  finishedAt: string;
+};
+
+async function captureGooseAttempt(run: CommandRunner, paths: GoosePaths, base: string): Promise<GooseAttempt> {
+  const gooseArgs = gooseArguments(paths.recipePath);
+  const startedAt = new Date().toISOString();
+  let goose: CommandResult;
+  try {
+    goose = await run(gooseArgs[0], gooseArgs.slice(1), paths.workspace);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'goose failed';
+    goose = { code: 1, stdout: '', stderr: message };
+  }
+  const finishedAt = new Date().toISOString();
+  const usage = readGooseRun(goose.stdout);
+  const assistantText = usage?.assistantText ?? '';
+  const stdout = truncate(assistantText);
+  const add = await run('git', ['add', '-A'], paths.workspace);
+  const diff =
+    add.code === 0
+      ? await run('git', ['diff', '--cached', base], paths.workspace)
+      : { code: add.code, stdout: '', stderr: add.stderr };
+  return { goose, usage, assistantText, stdout, add, diff, startedAt, finishedAt };
+}
+
+function isUnparsedToolCall(attempt: GooseAttempt): boolean {
+  return (
+    attempt.goose.code === 0 &&
+    attempt.add.code === 0 &&
+    attempt.diff.code === 0 &&
+    attempt.diff.stdout.trim().length === 0 &&
+    hasUnparsedToolCall(attempt.assistantText)
+  );
 }
 
 async function runCheckoutTests(
