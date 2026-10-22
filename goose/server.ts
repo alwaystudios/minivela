@@ -5,6 +5,7 @@ import { chmod, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { basename } from 'node:path';
 import { isDraftWrite } from '../lib/agent/draft.js';
+import { getProjectSecret, projectSecretName } from '../lib/project-secret.js';
 import { formatDraftMarkdown, type DraftWrite } from '../lib/work-order.js';
 
 export const GOOSE_RECIPE_PATH = '/opt/goose/recipe.yaml';
@@ -31,6 +32,10 @@ export type GoosePaths = {
 };
 
 export type DraftLoader = (key: { project: string; draftId: string }) => Promise<unknown>;
+
+export type SecretReader = (project: string, name: string) => Promise<string>;
+
+const GIT_PAT = 'git-pat';
 
 export type ParsedInvocation =
   | { ok: true; project: string; draftId: string; repo?: string }
@@ -156,6 +161,7 @@ export function createGooseServer(
     workspace: GOOSE_WORKSPACE,
   },
   loadDraft: DraftLoader = getDraftFromTable,
+  readSecret: SecretReader = getProjectSecret,
 ): Server {
   let busy = false;
   let statusChangedAt = unixSeconds();
@@ -183,7 +189,7 @@ export function createGooseServer(
           return;
         }
         if (req.method === 'POST' && req.url === '/invocations') {
-          await handleInvocation(req, res, run, paths, loadDraft, () => busy, setBusy);
+          await handleInvocation(req, res, run, paths, loadDraft, readSecret, () => busy, setBusy);
           return;
         }
         json(res, 404, failed('not found'));
@@ -202,6 +208,7 @@ async function handleInvocation(
   run: CommandRunner,
   paths: GoosePaths,
   loadDraft: DraftLoader,
+  readSecret: SecretReader,
   isBusy: () => boolean,
   setBusy: (next: boolean) => void,
 ): Promise<void> {
@@ -233,6 +240,17 @@ async function handleInvocation(
   }
   setBusy(true);
   try {
+    try {
+      await readGitPat(parsed.project, readSecret);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : `project secret ${projectSecretName(parsed.project, GIT_PAT)} is missing or unreadable`;
+      console.log(JSON.stringify({ project: parsed.project, draftId: parsed.draftId, status: 'error' }));
+      json(res, 200, failed(message, { diff: '', stdout: '' }));
+      return;
+    }
     const result = await applyWorkOrder(loaded.repoUrl, loaded.task, loaded.target, run, paths);
     console.log(
       JSON.stringify({
@@ -280,6 +298,13 @@ async function resolveTask(
     repoUrl: githubCloneUrl(target),
     target,
   };
+}
+
+async function readGitPat(project: string, readSecret: SecretReader): Promise<void> {
+  const secret = await readSecret(project, GIT_PAT);
+  if (secret.length === 0) {
+    throw new Error(`project secret ${projectSecretName(project, GIT_PAT)} is missing or unreadable`);
+  }
 }
 
 async function getDraftFromTable(key: { project: string; draftId: string }): Promise<unknown> {

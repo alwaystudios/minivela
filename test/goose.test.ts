@@ -24,6 +24,8 @@ jest.setTimeout(180_000);
 
 const HELLO = 'https://github.com/octocat/Hello-World';
 const CLONE_SHA = 'abc1234';
+const TEST_GIT_PAT = 'test-git-pat';
+const presentGitPat = async () => TEST_GIT_PAT;
 
 test('accepts a stored draft', () => {
   const parsed = parseInvocation({ project: 'acme', draftId: 'draft-1' });
@@ -110,12 +112,14 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   const root = await mkdtemp(join(tmpdir(), 'goose-'));
   const paths = testPaths(root);
   const calls: Array<{ command: string; args: string[]; cwd?: string }> = [];
+  const reads: Array<{ project: string; name: string }> = [];
   const run: CommandRunner = async (command, args, cwd) => {
     calls.push({ command, args, cwd });
     if (command === 'goose') {
       const mode = (await stat(paths.taskPath)).mode & 0o777;
       expect(mode).toBe(0o600);
       expect(await readFile(paths.targetPath, 'utf8')).toBe('octocat/Hello-World\n');
+      expect(await readFile(paths.taskPath, 'utf8')).not.toContain(TEST_GIT_PAT);
       return { code: 0, stdout: 'z'.repeat(STDOUT_LIMIT + 50), stderr: '' };
     }
     if (command === 'git' && args[0] === 'rev-parse') {
@@ -126,7 +130,10 @@ test('an invocation spawns git and goose with argument arrays and returns the di
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, paths, async () => sampleDraft());
+  const server = createGooseServer(run, paths, async () => sampleDraft(), async (project, name) => {
+    reads.push({ project, name });
+    return TEST_GIT_PAT;
+  });
   const port = await listen(server);
   try {
     const health = await getJson(port, '/health');
@@ -141,6 +148,7 @@ test('an invocation spawns git and goose with argument arrays and returns the di
       response: { diff: 'diff --git a/README.md\n' },
     });
     expect(response.body.response?.stdout).toHaveLength(STDOUT_LIMIT);
+    expect(response.body.response?.stdout).not.toContain(TEST_GIT_PAT);
   } finally {
     await close(server);
     await rm(root, { recursive: true, force: true });
@@ -157,6 +165,54 @@ test('an invocation spawns git and goose with argument arrays and returns the di
   expect(goose?.args).toEqual(gooseArguments().slice(1));
   expect(goose?.cwd).toBe(paths.workspace);
   expect(calls.some((call) => call.args.some((arg) => /gateway/i.test(arg)))).toBe(false);
+  expect(JSON.stringify(calls)).not.toContain(TEST_GIT_PAT);
+  expect(reads).toEqual([{ project: 'acme', name: 'git-pat' }]);
+});
+
+test('a missing git-pat stops before clone and Goose', async () => {
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    unusedPaths(),
+    async () => sampleDraft(),
+    async () => {
+      throw new Error('project secret minivela/acme/git-pat is missing or unreadable');
+    },
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { diff: '', error: 'project secret minivela/acme/git-pat is missing or unreadable' },
+    });
+  } finally {
+    await close(server);
+  }
+});
+
+test('an empty git-pat stops before clone and Goose', async () => {
+  const server = createGooseServer(
+    async () => {
+      throw new Error('should not run');
+    },
+    unusedPaths(),
+    async () => sampleDraft(),
+    async () => '',
+  );
+  const port = await listen(server);
+  try {
+    const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      status: 'error',
+      response: { diff: '', error: 'project secret minivela/acme/git-pat is missing or unreadable' },
+    });
+  } finally {
+    await close(server);
+  }
 });
 
 test('a goose failure is HTTP 200 and still returns the diff', async () => {
@@ -173,7 +229,7 @@ test('a goose failure is HTTP 200 and still returns the diff', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -208,10 +264,15 @@ test('a stored draft is formatted as the work order Goose reads', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, paths, async (key) => {
-    expect(key).toEqual({ project: 'acme', draftId: 'draft-1' });
-    return draft;
-  });
+  const server = createGooseServer(
+    run,
+    paths,
+    async (key) => {
+      expect(key).toEqual({ project: 'acme', draftId: 'draft-1' });
+      return draft;
+    },
+    presentGitPat,
+  );
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -302,7 +363,7 @@ test('a multi-repo order with a selector clones that repo', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, paths, async () => twoRepoDraft());
+  const server = createGooseServer(run, paths, async () => twoRepoDraft(), presentGitPat);
   const port = await listen(server);
   try {
     const response = await postJson(port, {
@@ -336,7 +397,7 @@ test('an empty diff after Goose exits 0 is an error', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -365,7 +426,7 @@ test('a Goose commit is still a change because the diff is against the clone tip
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -391,7 +452,7 @@ test('a git add failure is an error', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
   const port = await listen(server);
   try {
     const response = await postJson(port, { project: 'acme', draftId: 'draft-1' });
@@ -441,7 +502,7 @@ test('while goose is running, ping is HealthyBusy', async () => {
     }
     return { code: 0, stdout: '', stderr: '' };
   };
-  const server = createGooseServer(run, testPaths(root), async () => sampleDraft());
+  const server = createGooseServer(run, testPaths(root), async () => sampleDraft(), presentGitPat);
   port = await listen(server);
   try {
     const pending = postJson(port, { project: 'acme', draftId: 'draft-1' });
