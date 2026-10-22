@@ -25,11 +25,19 @@ import {
   type RetrievedDecision,
   type ScoredDecision,
 } from '../search-decisions.js';
-import { breakdownQueryInput, readBreakdown, type BreakdownRow } from '../breakdown.js';
+import { breakdownQueryInput, type BreakdownRow } from '../breakdown.js';
 import type { DraftWrite } from '../work-order.js';
 import { promptForInvoke, readTicketMarkdown } from '../ticket.js';
 import { answerFromMemory, parseInvokePayload, retrievalFilterFor, type RetrievedChunk } from './answer.js';
-import { BREAKDOWN_SYSTEM_PROMPT, draftBreakdown, TICKET_TEMPLATE_ID } from './draft-breakdown.js';
+import {
+  BREAKDOWN_SYSTEM_PROMPT,
+  breakdownCompletionFromModel,
+  draftBreakdown,
+  fetchStoredBreakdown,
+  TICKET_TEMPLATE_ID,
+  type BreakdownModelCompletion,
+  type DraftBreakdownRun,
+} from './draft-breakdown.js';
 import {
   draftCompletionFromModel,
   draftWorkOrder,
@@ -367,7 +375,7 @@ async function completeBreakdown(query: {
   decisions: RetrievedDecision[];
   repos: Repo[];
   template?: string;
-}): Promise<{ text: string; cutOff: boolean }> {
+}): Promise<BreakdownModelCompletion> {
   const templateContext = query.template ?? '(no template; follow ordinary Jira practice)';
   const reposContext = query.repos
     .map((repo, index) => `${index + 1}. ${repo.owner}/${repo.repo} url=${repo.url}\n${repo.summary}`)
@@ -385,9 +393,11 @@ async function completeBreakdown(query: {
     query.chunks.length === 0
       ? '(no documents)'
       : query.chunks.map((chunk, index) => `${index + 1}. ${chunk.uri ?? 'document'}\n${chunk.text}`).join('\n\n');
+  const model = process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID;
+  const startedAt = new Date().toISOString();
   const response = await bedrock.send(
     new InvokeModelCommand({
-      modelId: process.env.ANSWER_MODEL_ID ?? EXTRACT_MODEL_ID,
+      modelId: model,
       contentType: 'application/json',
       accept: 'application/json',
       body: JSON.stringify({
@@ -403,16 +413,25 @@ async function completeBreakdown(query: {
       }),
     }),
   );
+  const finishedAt = new Date().toISOString();
   const payload = JSON.parse(new TextDecoder().decode(response.body)) as {
     stop_reason?: string;
     content?: Array<{ text?: string }>;
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
   const text = payload.content?.map((part) => part.text ?? '').join('') ?? '';
   const cutOff = payload.stop_reason === 'max_tokens';
   if (!text && !cutOff) {
     throw new Error('breakdown model returned no text');
   }
-  return { text, cutOff };
+  return breakdownCompletionFromModel({
+    text,
+    cutOff,
+    model,
+    usage: payload.usage,
+    startedAt,
+    finishedAt,
+  });
 }
 
 async function loadTicketTemplate(project: string): Promise<string | undefined> {
@@ -446,7 +465,7 @@ async function putDraft(item: DraftWrite): Promise<void> {
   );
 }
 
-async function putSdlcRun(row: DraftWorkOrderRun): Promise<void> {
+async function putSdlcRun(row: DraftWorkOrderRun | DraftBreakdownRun): Promise<void> {
   await docClient.send(
     new PutCommand({
       TableName: requiredEnv('SDLC_RUNS_TABLE_NAME'),
@@ -510,10 +529,11 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
     return;
   }
   if ('breakdownId' in parsedPayload) {
-    const result = await readBreakdown({
+    const result = await fetchStoredBreakdown({
       project: parsedPayload.project,
       breakdownId: parsedPayload.breakdownId,
       query: queryBreakdown,
+      putRun: putSdlcRun,
     });
     json(res, 200, result);
     return;
@@ -529,6 +549,7 @@ async function handleInvocations(req: IncomingMessage, res: ServerResponse): Pro
       loadTemplate: loadTicketTemplate,
       complete: completeBreakdown,
       put: putBreakdowns,
+      putRun: putSdlcRun,
       breakdownId: randomUUID(),
       createdAt: new Date().toISOString(),
     });
