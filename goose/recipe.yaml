@@ -16,7 +16,7 @@ prompt: |
   If a stop premise fails, do not invent a replacement. Leave the checkout unchanged for that work and stop.
   If a step premise fails, skip that step and continue.
   Do not try to satisfy a human-verified acceptance line.
-  Stop when the edit for this repository is complete, or when a stop premise failed.
+  The edit is complete only when every acceptance line that is not human-verified is satisfied in the checkout. Stop when that is true, or when a stop premise failed.
   Do not push.
   Do not open a pull request.
   Do not call any remote MCP server.

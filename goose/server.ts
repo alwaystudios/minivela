@@ -91,17 +91,23 @@ export type TargetRepo = { owner: string; repo: string };
 export type GooseInvokeResult = {
   status: 'success' | 'error';
   response: { diff?: string; stdout?: string; error?: string; branch?: string };
+  gooseExit?: number;
+  durationMs?: number;
+  reason?: string;
 };
 
 function failed(
   error: string,
   extra?: { diff?: string; stdout?: string; branch?: string },
+  gooseExit?: number,
+  durationMs?: number,
+  reason?: string,
 ): GooseInvokeResult {
-  return { status: 'error', response: { ...extra, error } };
+  return { status: 'error', response: { ...extra, error }, gooseExit, durationMs, reason };
 }
 
-function succeeded(diff: string, stdout: string, branch: string): GooseInvokeResult {
-  return { status: 'success', response: { diff, stdout, branch } };
+function succeeded(diff: string, stdout: string, branch: string, gooseExit?: number, durationMs?: number, reason?: string): GooseInvokeResult {
+  return { status: 'success', response: { diff, stdout, branch }, gooseExit, durationMs, reason };
 }
 
 export function gooseBranch(draftId: string): string {
@@ -491,6 +497,7 @@ async function applyWorkOrder(
   putRun: SdlcRunWriter,
   apply: { token: string; project: string; draftId: string },
 ): Promise<GooseInvokeResult> {
+  const startTime = Date.now();
   await rm(paths.workspace, { recursive: true, force: true });
   const clone = await run('git', ['clone', '--depth', '1', repoUrl, paths.workspace]);
   if (clone.code !== 0) {
@@ -531,8 +538,9 @@ async function applyWorkOrder(
       finishedAt,
       stdout,
     });
+  const durationMs = Date.now() - startTime;
   if (goose.code !== 0) {
-    return finish(failed(commandFailure('goose', goose), { diff: diff.stdout, stdout }));
+    return finish(failed(commandFailure('goose', goose), { diff: diff.stdout, stdout }, goose.code, durationMs, 'goose exited'));
   }
   if (add.code !== 0) {
     return finish(failed(commandFailure('git add', add), { diff: '', stdout }));
@@ -546,6 +554,20 @@ async function applyWorkOrder(
   if (pricedGooseUsage(usage) === undefined) {
     return failed('goose output has no token counts', { diff: diff.stdout, stdout });
   }
+
+  // Test gate: run npm ci (if node_modules absent) and npm test on non-empty diff when goose exited 0
+  const nodeModulesExists = await run('test', ['-d', 'node_modules'], paths.workspace);
+  if (nodeModulesExists.code !== 0) {
+    const npmCi = await run('npm', ['ci'], paths.workspace);
+    if (npmCi.code !== 0) {
+      return finish(failed(`npm ci exited ${npmCi.code}: ${truncate(npmCi.stderr.trim() || npmCi.stdout.trim())}`, { diff: diff.stdout, stdout: truncate(npmCi.stdout) }));
+    }
+  }
+  const npmTest = await run('npm', ['test'], paths.workspace);
+  if (npmTest.code !== 0) {
+    return finish(failed(`npm test exited ${npmTest.code}: ${truncate(npmTest.stderr.trim() || npmTest.stdout.trim())}`, { diff: diff.stdout, stdout: truncate(npmTest.stdout) }));
+  }
+
   const branch = gooseBranch(apply.draftId);
   const remote = await run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], paths.workspace);
   if (remote.code !== 0) {
