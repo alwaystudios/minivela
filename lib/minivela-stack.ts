@@ -64,6 +64,13 @@ export class MinivelaStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
+    const sdlcRuns = new dynamodb.Table(this, 'SdlcRuns', {
+      partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'runId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
     const breakdowns = new dynamodb.Table(this, 'Breakdowns', {
       partitionKey: { name: 'project', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'ticketId', type: dynamodb.AttributeType.STRING },
@@ -422,6 +429,7 @@ export class MinivelaStack extends cdk.Stack {
         GOOSE_DISABLE_SESSION_NAMING: 'true',
         GOOSE_PATH_ROOT: '/tmp/goose',
         DRAFTS_TABLE_NAME: drafts.tableName,
+        SDLC_RUNS_TABLE_NAME: sdlcRuns.tableName,
       },
     });
     goose.role.addToPrincipalPolicy(
@@ -434,6 +442,12 @@ export class MinivelaStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ['dynamodb:GetItem'],
         resources: [drafts.tableArn],
+      }),
+    );
+    goose.role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['dynamodb:PutItem'],
+        resources: [sdlcRuns.tableArn],
       }),
     );
     new cdk.CfnOutput(this, 'GooseRuntimeArn', {

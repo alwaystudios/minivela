@@ -91,6 +91,8 @@ export function gooseArguments(recipePath = GOOSE_RECIPE_PATH): string[] {
     'developer',
     '--no-profile',
     '--no-session',
+    '--output-format',
+    'json',
   ];
 }
 
